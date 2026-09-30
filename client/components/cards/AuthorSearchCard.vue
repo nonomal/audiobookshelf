@@ -1,10 +1,11 @@
 <template>
   <div class="flex h-full px-1 overflow-hidden">
-    <div class="overflow-hidden bg-primary rounded" style="height: 50px; width: 40px">
+    <div class="overflow-hidden bg-primary rounded-sm" style="height: 50px; width: 40px">
       <covers-author-image :author="author" />
     </div>
-    <div class="flex-grow px-2 authorSearchCardContent h-full">
+    <div class="grow px-2 authorSearchCardContent h-full">
       <p class="truncate text-sm">{{ name }}</p>
+      <p class="text-xs text-gray-400">{{ $getString('LabelXBooks', [numBooks]) }}</p>
     </div>
   </div>
 </template>
@@ -23,6 +24,9 @@ export default {
   computed: {
     name() {
       return this.author.name
+    },
+    numBooks() {
+      return this.author.numBooks
     }
   },
   methods: {},
@@ -33,7 +37,7 @@ export default {
 <style>
 .authorSearchCardContent {
   width: calc(100% - 80px);
-  height: 40px;
+  height: 44px;
   display: flex;
   flex-direction: column;
   justify-content: center;

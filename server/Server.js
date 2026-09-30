@@ -5,12 +5,16 @@ const http = require('http')
 const util = require('util')
 const fs = require('./libs/fsExtra')
 const fileUpload = require('./libs/expressFileupload')
-const cookieParser = require("cookie-parser")
+const cookieParser = require('cookie-parser')
+const axios = require('axios')
 
 const { version } = require('../package.json')
 
 // Utils
+const is = require('./libs/requestIp/isJs')
 const fileUtils = require('./utils/fileUtils')
+const { toNumber } = require('./utils/index')
+const { getRequestOrigin } = require('./utils/requestUtils')
 const Logger = require('./Logger')
 
 const Auth = require('./Auth')
@@ -20,9 +24,9 @@ const SocketAuthority = require('./SocketAuthority')
 
 const ApiRouter = require('./routers/ApiRouter')
 const HlsRouter = require('./routers/HlsRouter')
+const PublicRouter = require('./routers/PublicRouter')
 
 const LogManager = require('./managers/LogManager')
-const NotificationManager = require('./managers/NotificationManager')
 const EmailManager = require('./managers/EmailManager')
 const AbMergeManager = require('./managers/AbMergeManager')
 const CacheManager = require('./managers/CacheManager')
@@ -34,11 +38,25 @@ const RssFeedManager = require('./managers/RssFeedManager')
 const CronManager = require('./managers/CronManager')
 const ApiCacheManager = require('./managers/ApiCacheManager')
 const BinaryManager = require('./managers/BinaryManager')
+const ShareManager = require('./managers/ShareManager')
 const LibraryScanner = require('./scanner/LibraryScanner')
 
 //Import the main Passport and Express-Session library
 const passport = require('passport')
 const expressSession = require('express-session')
+const MemoryStore = require('./libs/memorystore')
+
+/**
+ * `next()` for a custom server is a NextCustomServer wrapper. After prepare(),
+ * `.server` is another NextServer wrapper; the Node server with `nextConfig` is
+ * one more `.server` down. Older react clients have no basePath and must keep
+ * Express-stripped URLs.
+ */
+function getPreparedNextBasePath(nextApp) {
+  const nodeServer = nextApp.server?.server
+  const basePath = nodeServer?.nextConfig?.basePath
+  return typeof basePath === 'string' ? basePath : ''
+}
 
 class Server {
   constructor(SOURCE, PORT, HOST, CONFIG_PATH, METADATA_PATH, ROUTER_BASE_PATH) {
@@ -50,6 +68,39 @@ class Server {
     global.MetadataPath = fileUtils.filePathToPOSIX(Path.normalize(METADATA_PATH))
     global.RouterBasePath = ROUTER_BASE_PATH
     global.XAccel = process.env.USE_X_ACCEL
+    global.AllowCors = process.env.ALLOW_CORS === '1'
+
+    if (process.env.EXP_PROXY_SUPPORT === '1') {
+      // https://github.com/advplyr/audiobookshelf/pull/3754
+      Logger.info(`[Server] Experimental Proxy Support Enabled, SSRF Request Filter was Disabled`)
+      global.DisableSsrfRequestFilter = () => true
+
+      axios.defaults.maxRedirects = 0
+      axios.interceptors.response.use(
+        (response) => response,
+        (error) => {
+          if ([301, 302].includes(error.response?.status)) {
+            return axios({
+              ...error.config,
+              url: error.response.headers.location
+            })
+          }
+
+          return Promise.reject(error)
+        }
+      )
+    } else if (process.env.DISABLE_SSRF_REQUEST_FILTER === '1') {
+      Logger.info(`[Server] SSRF Request Filter Disabled`)
+      global.DisableSsrfRequestFilter = () => true
+    } else if (process.env.SSRF_REQUEST_FILTER_WHITELIST?.length) {
+      const whitelistedUrls = process.env.SSRF_REQUEST_FILTER_WHITELIST.split(',').map((url) => url.trim())
+      if (whitelistedUrls.length) {
+        Logger.info(`[Server] SSRF Request Filter Whitelisting: ${whitelistedUrls.join(',')}`)
+        global.DisableSsrfRequestFilter = (url) => whitelistedUrls.includes(new URL(url).hostname)
+      }
+    }
+    global.PodcastDownloadTimeout = toNumber(process.env.PODCAST_DOWNLOAD_TIMEOUT, 30000)
+    global.MaxFailedEpisodeChecks = toNumber(process.env.MAX_FAILED_EPISODE_CHECKS, 24)
 
     if (!fs.pathExistsSync(global.ConfigPath)) {
       fs.mkdirSync(global.ConfigPath)
@@ -58,32 +109,36 @@ class Server {
       fs.mkdirSync(global.MetadataPath)
     }
 
-    this.watcher = new Watcher()
     this.auth = new Auth()
 
     // Managers
-    this.notificationManager = new NotificationManager()
     this.emailManager = new EmailManager()
     this.backupManager = new BackupManager()
     this.abMergeManager = new AbMergeManager()
     this.playbackSessionManager = new PlaybackSessionManager()
-    this.podcastManager = new PodcastManager(this.watcher, this.notificationManager)
+    this.podcastManager = new PodcastManager()
     this.audioMetadataManager = new AudioMetadataMangaer()
-    this.rssFeedManager = new RssFeedManager()
-    this.cronManager = new CronManager(this.podcastManager)
+    this.cronManager = new CronManager(this.podcastManager, this.playbackSessionManager)
     this.apiCacheManager = new ApiCacheManager()
     this.binaryManager = new BinaryManager()
 
     // Routers
     this.apiRouter = new ApiRouter(this)
     this.hlsRouter = new HlsRouter(this.auth, this.playbackSessionManager)
+    this.publicRouter = new PublicRouter(this.playbackSessionManager)
 
     Logger.logManager = new LogManager()
 
     this.server = null
-    this.io = null
   }
 
+  /**
+   * Middleware to check if the current request is authenticated
+   *
+   * @param {import('express').Request} req
+   * @param {import('express').Response} res
+   * @param {import('express').NextFunction} next
+   */
   authMiddleware(req, res, next) {
     // ask passportjs if the current request is authenticated
     this.auth.isAuthenticated(req, res, next)
@@ -99,38 +154,52 @@ class Server {
    */
   async init() {
     Logger.info('[Server] Init v' + version)
+    Logger.info('[Server] Node.js Version:', process.version)
+    Logger.info('[Server] Platform:', process.platform)
+    Logger.info('[Server] Arch:', process.arch)
 
     await this.playbackSessionManager.removeOrphanStreams()
 
+    /**
+     * Docker container ffmpeg/ffprobe binaries are included in the image.
+     * Docker is currently using ffmpeg/ffprobe v6.1 instead of v5.1 so skipping the check
+     * TODO: Support binary check for all sources
+     */
+    if (global.Source !== 'docker') {
+      await this.binaryManager.init()
+    }
+
     await Database.init(false)
 
-    await Logger.logManager.init()
-
-    // Create token secret if does not exist (Added v2.1.0)
-    if (!Database.serverSettings.tokenSecret) {
-      await this.auth.initTokenSecret()
+    if (typeof global.RouterBasePath !== 'string') {
+      throw new Error('[Server] RouterBasePath must be a string before serving requests')
     }
+    Logger.info(`[Server] Serving from base path "${global.RouterBasePath || '/'}"`)
+
+    // Create or set JWT secret in token manager
+    await this.auth.tokenManager.initTokenSecret()
+
+    await Logger.logManager.init()
 
     await this.cleanUserData() // Remove invalid user item progress
     await CacheManager.ensureCachePaths()
 
+    await ShareManager.init()
     await this.backupManager.init()
-    await this.rssFeedManager.init()
+    await RssFeedManager.init()
 
-    const libraries = await Database.libraryModel.getAllOldLibraries()
+    const libraries = await Database.libraryModel.getAllWithFolders()
     await this.cronManager.init(libraries)
     this.apiCacheManager.init()
 
-    // Download ffmpeg & ffprobe if not found (Currently only in use for Windows installs)
-    if (global.isWin || Logger.isDev) {
-      await this.binaryManager.init()
-    }
-
     if (Database.serverSettings.scannerDisableWatcher) {
       Logger.info(`[Server] Watcher is disabled`)
-      this.watcher.disabled = true
+      Watcher.disabled = true
     } else {
-      this.watcher.initWatcher(libraries)
+      Watcher.initWatcher(libraries)
+      Watcher.on('scanFilesChanged', (pendingFileUpdates, pendingTask) => {
+        LibraryScanner.scanFilesChanged(pendingFileUpdates, pendingTask)
+      })
     }
   }
 
@@ -161,34 +230,45 @@ class Server {
      * @see https://nodejs.org/api/process.html#event-unhandledrejection
      */
     process.on('unhandledRejection', async (reason, promise) => {
-      await Logger.fatal(`[Server] Unhandled rejection: ${reason}, promise:`, util.format('%O', promise))
+      await Logger.fatal('[Server] Unhandled rejection:', reason, '\npromise:', util.format('%O', promise))
       process.exit(1)
     })
   }
 
   async start() {
     Logger.info('=== Starting Server ===')
+
     this.initProcessEventListeners()
     await this.init()
 
     const app = express()
 
-    /**
-     * @temporary
-     * This is necessary for the ebook & cover API endpoint in the mobile apps
-     * The mobile app ereader is using fetch api in Capacitor that is currently difficult to switch to native requests
-     * so we have to allow cors for specific origins to the /api/items/:id/ebook endpoint
-     * The cover image is fetched with XMLHttpRequest in the mobile apps to load into a canvas and extract colors
-     * @see https://ionicframework.com/docs/troubleshooting/cors
-     * 
-     * Running in development allows cors to allow testing the mobile apps in the browser 
-     */
     app.use((req, res, next) => {
-      if (Logger.isDev || req.path.match(/\/api\/items\/([a-z0-9-]{36})\/(ebook|cover)(\/[0-9]+)?/)) {
-        const allowedOrigins = ['capacitor://localhost', 'http://localhost']
-        if (Logger.isDev || allowedOrigins.some(o => o === req.get('origin'))) {
+      if (!global.ServerSettings.allowIframe) {
+        // Prevent clickjacking by disallowing iframes
+        res.setHeader('Content-Security-Policy', "frame-ancestors 'self'")
+      }
+
+      // Security: Prevent referrer leakage to protect against token exposure
+      // Using 'no-referrer' to completely prevent token leakage in referer headers
+      res.setHeader('Referrer-Policy', 'no-referrer')
+
+      /**
+       * @temporary
+       * This is necessary for the ebook & cover API endpoint in the mobile apps
+       * The mobile app ereader is using fetch api in Capacitor that is currently difficult to switch to native requests
+       * so we have to allow cors for specific origins to the /api/items/:id/ebook endpoint
+       * The cover image is fetched with XMLHttpRequest in the mobile apps to load into a canvas and extract colors
+       * @see https://ionicframework.com/docs/troubleshooting/cors
+       *
+       * Running in development allows cors to allow testing the mobile apps in the browser
+       * or env variable ALLOW_CORS = '1'
+       */
+      if (global.AllowCors || Logger.isDev || req.path.match(/\/api\/items\/([a-z0-9-]{36})\/(ebook|cover)(\/[0-9]+)?/) || global.ServerSettings.allowedOrigins?.length) {
+        const allowedOrigins = ['capacitor://localhost', 'http://localhost', ...(global.ServerSettings.allowedOrigins ? global.ServerSettings.allowedOrigins : [])]
+        if (global.AllowCors || Logger.isDev || allowedOrigins.some((o) => o === req.get('origin'))) {
           res.header('Access-Control-Allow-Origin', req.get('origin'))
-          res.header("Access-Control-Allow-Methods", 'GET, POST, PATCH, PUT, DELETE, OPTIONS')
+          res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS')
           res.header('Access-Control-Allow-Headers', '*')
           res.header('Access-Control-Allow-Credentials', true)
           if (req.method === 'OPTIONS') {
@@ -203,86 +283,80 @@ class Server {
     // parse cookies in requests
     app.use(cookieParser())
     // enable express-session
-    app.use(expressSession({
-      secret: global.ServerSettings.tokenSecret,
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        // also send the cookie if were are not on https (not every use has https)
-        secure: false
-      },
-    }))
+    app.use(
+      expressSession({
+        secret: this.auth.tokenManager.TokenSecret,
+        resave: false,
+        saveUninitialized: false,
+        cookie: {
+          // also send the cookie if were are not on https (not every use has https)
+          secure: false
+        },
+        store: new MemoryStore(86400000, 86400000, 1000)
+      })
+    )
     // init passport.js
     app.use(passport.initialize())
     // register passport in express-session
-    app.use(passport.session())
+    app.use(this.auth.ifAuthNeeded(passport.session()))
     // config passport.js
     await this.auth.initPassportJs()
 
     const router = express.Router()
+
+    // if RouterBasePath is set, modify all requests to include the base path
+    app.use((req, res, next) => {
+      const urlStartsWithRouterBasePath = req.url.startsWith(global.RouterBasePath)
+      const { origin } = getRequestOrigin(req)
+      const prefix = urlStartsWithRouterBasePath ? global.RouterBasePath : ''
+      req.originalHostPrefix = `${origin}${prefix}`
+      if (!urlStartsWithRouterBasePath) {
+        req.url = `${global.RouterBasePath}${req.url}`
+      }
+      next()
+    })
     app.use(global.RouterBasePath, router)
     app.disable('x-powered-by')
 
     this.server = http.createServer(app)
 
-    router.use(fileUpload({
-      defCharset: 'utf8',
-      defParamCharset: 'utf8',
-      useTempFiles: true,
-      tempFileDir: Path.join(global.MetadataPath, 'tmp')
-    }))
-    router.use(express.urlencoded({ extended: true, limit: "5mb" }))
-    router.use(express.json({ limit: "5mb" }))
+    // Skip file upload parsing for internal-api routes (Next.js proxies read multipart bodies).
+    router.use(
+      /^(?!\/internal-api).*/,
+      fileUpload({
+        defCharset: 'utf8',
+        defParamCharset: 'utf8',
+        useTempFiles: true,
+        tempFileDir: Path.join(global.MetadataPath, 'tmp')
+      })
+    )
+    router.use(express.urlencoded({ extended: true, limit: '5mb' }))
 
-    // Static path to generated nuxt
-    const distPath = Path.join(global.appRoot, '/client/dist')
-    router.use(express.static(distPath))
+    // Skip JSON parsing for internal-api routes
+    router.use(/^(?!\/internal-api).*/, express.json({ limit: '10mb' }))
+
+    router.use('/api', this.auth.ifAuthNeeded(this.authMiddleware.bind(this)), this.apiRouter.router)
+    router.use('/hls', this.hlsRouter.router)
+    router.use('/public', this.publicRouter.router)
 
     // Static folder
     router.use(express.static(Path.join(global.appRoot, 'static')))
 
-    router.use('/api', this.authMiddleware.bind(this), this.apiRouter.router)
-    router.use('/hls', this.authMiddleware.bind(this), this.hlsRouter.router)
-
     // RSS Feed temp route
     router.get('/feed/:slug', (req, res) => {
       Logger.info(`[Server] Requesting rss feed ${req.params.slug}`)
-      this.rssFeedManager.getFeed(req, res)
+      RssFeedManager.getFeed(req, res)
     })
     router.get('/feed/:slug/cover*', (req, res) => {
-      this.rssFeedManager.getFeedCover(req, res)
+      RssFeedManager.getFeedCover(req, res)
     })
     router.get('/feed/:slug/item/:episodeId/*', (req, res) => {
       Logger.debug(`[Server] Requesting rss feed episode ${req.params.slug}/${req.params.episodeId}`)
-      this.rssFeedManager.getFeedItem(req, res)
+      RssFeedManager.getFeedItem(req, res)
     })
 
     // Auth routes
     await this.auth.initAuthRoutes(router)
-
-    // Client dynamic routes
-    const dyanimicRoutes = [
-      '/item/:id',
-      '/author/:id',
-      '/audiobook/:id/chapters',
-      '/audiobook/:id/edit',
-      '/audiobook/:id/manage',
-      '/library/:library',
-      '/library/:library/search',
-      '/library/:library/bookshelf/:id?',
-      '/library/:library/authors',
-      '/library/:library/narrators',
-      '/library/:library/series/:id?',
-      '/library/:library/podcast/search',
-      '/library/:library/podcast/latest',
-      '/library/:library/podcast/download-queue',
-      '/config/users/:id',
-      '/config/users/:id/sessions',
-      '/config/item-metadata-utils/:id',
-      '/collection/:id',
-      '/playlist/:id'
-    ]
-    dyanimicRoutes.forEach((route) => router.get(route, (req, res) => res.sendFile(Path.join(distPath, 'index.html'))))
 
     router.post('/init', (req, res) => {
       if (Database.hasRootUser) {
@@ -312,12 +386,81 @@ class Server {
       Logger.info('Received ping')
       res.json({ success: true })
     })
-    app.get('/healthcheck', (req, res) => res.sendStatus(200))
+    router.get('/healthcheck', (req, res) => res.sendStatus(200))
 
-    this.server.listen(this.Port, this.Host, () => {
-      if (this.Host) Logger.info(`Listening on http://${this.Host}:${this.Port}`)
-      else Logger.info(`Listening on port :${this.Port}`)
-    })
+    const ReactClientPath = process.env.REACT_CLIENT_PATH
+    if (!ReactClientPath) {
+      // Static path to generated nuxt
+      const distPath = Path.join(global.appRoot, '/client/dist')
+      router.use(express.static(distPath))
+
+      // Client dynamic routes
+      const dynamicRoutes = [
+        '/item/:id',
+        '/author/:id',
+        '/audiobook/:id/chapters',
+        '/audiobook/:id/edit',
+        '/audiobook/:id/manage',
+        '/library/:library',
+        '/library/:library/search',
+        '/library/:library/bookshelf/:id?',
+        '/library/:library/authors',
+        '/library/:library/narrators',
+        '/library/:library/stats',
+        '/library/:library/series/:id?',
+        '/library/:library/podcast/search',
+        '/library/:library/podcast/latest',
+        '/library/:library/podcast/download-queue',
+        '/config/users/:id',
+        '/config/users/:id/sessions',
+        '/config/item-metadata-utils/:id',
+        '/collection/:id',
+        '/playlist/:id',
+        '/share/:slug'
+      ]
+      dynamicRoutes.forEach((route) => router.get(route, (req, res) => res.sendFile(Path.join(distPath, 'index.html'))))
+    } else {
+      // This is for using the experimental Next.js client
+      Logger.info(`Using React client at ${ReactClientPath}`)
+      const nextPath = Path.join(ReactClientPath, 'node_modules/next')
+      const next = require(nextPath)
+      const nextApp = next({ dev: Logger.isDev, dir: ReactClientPath })
+      const handle = nextApp.getRequestHandler()
+      await nextApp.prepare()
+      const nextBasePath = getPreparedNextBasePath(nextApp)
+      if (nextBasePath) {
+        Logger.info(`[Server] Next client basePath is "${nextBasePath}"`)
+      } else {
+        Logger.info(`[Server] Next client has no basePath; leaving Express-stripped URLs as-is`)
+      }
+      router.all('*', (req, res) => {
+        // Next is configured with the same base path as this router, but Express strips the mount
+        // prefix from req.url, so put it back. The bare mount path is passed through without a
+        // trailing slash, which Next would otherwise redirect away from on every request.
+        // Skip when Next has no basePath (older client on master).
+        if (nextBasePath && req.baseUrl) {
+          const queryIndex = req.url.indexOf('?')
+          const pathname = queryIndex === -1 ? req.url : req.url.slice(0, queryIndex)
+          const search = queryIndex === -1 ? '' : req.url.slice(queryIndex)
+          req.url = `${req.baseUrl}${pathname === '/' ? '' : pathname}${search}`
+        }
+        handle(req, res)
+      })
+    }
+
+    const unixSocketPrefix = 'unix/'
+    if (this.Host?.startsWith(unixSocketPrefix)) {
+      const sockPath = this.Host.slice(unixSocketPrefix.length)
+      this.server.listen(sockPath, async () => {
+        await fs.chmod(sockPath, 0o666)
+        Logger.info(`Listening on unix socket ${sockPath}`)
+      })
+    } else {
+      this.server.listen(this.Port, this.Host, () => {
+        if (this.Host) Logger.info(`Listening on http://${is.ipv6(this.Host) ? `[${this.Host}]` : this.Host}:${this.Port}`)
+        else Logger.info(`Listening on port :${this.Port}`)
+      })
+    }
 
     // Start listening for socket connections
     SocketAuthority.initialize(this)
@@ -327,7 +470,7 @@ class Server {
     Logger.info(`[Server] Initializing new server`)
     const newRoot = req.body.newRoot
     const rootUsername = newRoot.username || 'root'
-    const rootPash = newRoot.password ? await this.auth.hashPass(newRoot.password) : ''
+    const rootPash = newRoot.password ? await this.auth.localAuthStrategy.hashPassword(newRoot.password) : ''
     if (!rootPash) Logger.warn(`[Server] Creating root user with no password`)
     await Database.createRootUser(rootUsername, rootPash, this.auth)
 
@@ -361,7 +504,7 @@ class Server {
       const mediaProgressRemoved = await Database.mediaProgressModel.destroy({
         where: {
           id: {
-            [Sequelize.Op.in]: mediaProgressToRemove.map(mp => mp.id)
+            [Sequelize.Op.in]: mediaProgressToRemove.map((mp) => mp.id)
           }
         }
       })
@@ -371,28 +514,24 @@ class Server {
     }
 
     // Remove series from hide from continue listening that no longer exist
-    const users = await Database.userModel.getOldUsers()
-    for (const _user of users) {
-      let hasUpdated = false
-      if (_user.seriesHideFromContinueListening.length) {
-        const seriesHiding = (await Database.seriesModel.findAll({
-          where: {
-            id: _user.seriesHideFromContinueListening
-          },
-          attributes: ['id'],
-          raw: true
-        })).map(se => se.id)
-        _user.seriesHideFromContinueListening = _user.seriesHideFromContinueListening.filter(seriesId => {
-          if (!seriesHiding.includes(seriesId)) { // Series removed
-            hasUpdated = true
-            return false
-          }
-          return true
-        })
+    try {
+      const users = await Database.sequelize.query(`SELECT u.id, u.username, u.extraData, json_group_array(value) AS seriesIdsToRemove FROM users u, json_each(u.extraData->"seriesHideFromContinueListening") LEFT JOIN series se ON se.id = value WHERE se.id IS NULL GROUP BY u.id;`, {
+        model: Database.userModel,
+        type: Sequelize.QueryTypes.SELECT
+      })
+      for (const user of users) {
+        const extraData = JSON.parse(user.extraData)
+        const existingSeriesIds = extraData.seriesHideFromContinueListening
+        const seriesIdsToRemove = JSON.parse(user.dataValues.seriesIdsToRemove)
+        Logger.info(`[Server] Found ${seriesIdsToRemove.length} non-existent series in seriesHideFromContinueListening for user "${user.username}" - Removing (${seriesIdsToRemove.join(',')})`)
+        const newExtraData = {
+          ...extraData,
+          seriesHideFromContinueListening: existingSeriesIds.filter((s) => !seriesIdsToRemove.includes(s))
+        }
+        await user.update({ extraData: newExtraData })
       }
-      if (hasUpdated) {
-        await Database.updateUser(_user)
-      }
+    } catch (error) {
+      Logger.error(`[Server] Failed to cleanup users seriesHideFromContinueListening`, error)
     }
   }
 
@@ -402,19 +541,12 @@ class Server {
    */
   async stop() {
     Logger.info('=== Stopping Server ===')
-    await this.watcher.close()
-    Logger.info('Watcher Closed')
-
-    return new Promise((resolve) => {
-      SocketAuthority.close((err) => {
-        if (err) {
-          Logger.error('Failed to close server', err)
-        } else {
-          Logger.info('Server successfully closed')
-        }
-        resolve()
-      })
-    })
+    Watcher.close()
+    Logger.info('[Server] Watcher Closed')
+    await SocketAuthority.close()
+    Logger.info('[Server] Closing HTTP Server')
+    await new Promise((resolve) => this.server.close(resolve))
+    Logger.info('[Server] HTTP Server Closed')
   }
 }
 module.exports = Server

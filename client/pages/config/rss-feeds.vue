@@ -3,36 +3,36 @@
     <app-settings-content :header-text="$strings.HeaderRSSFeeds">
       <template #header-items>
         <ui-tooltip :text="$strings.LabelClickForMoreInfo" class="inline-flex ml-2">
-          <a href="https://www.audiobookshelf.org/guides/rss_feeds" target="_blank" class="inline-flex">
-            <span class="material-icons text-xl w-5 text-gray-200">help_outline</span>
+          <a href="https://audiobookshelf.org/docs/documentation/libraries/common-content/public-shares#rss-feed" target="_blank" class="inline-flex">
+            <span class="material-symbols text-xl w-5 text-gray-200">help_outline</span>
           </a>
         </ui-tooltip>
       </template>
 
       <div v-if="feeds.length" class="block max-w-full pt-2">
         <table class="rssFeedsTable text-xs">
-          <tr class="bg-primary bg-opacity-40 h-12">
+          <tr class="bg-primary/40 h-12">
             <th class="w-16 min-w-16"></th>
             <th class="w-48 max-w-64 min-w-24 text-left truncate">{{ $strings.LabelTitle }}</th>
             <th class="w-48 min-w-24 text-left hidden xl:table-cell">{{ $strings.LabelSlug }}</th>
             <th class="w-24 min-w-16 text-left hidden md:table-cell">{{ $strings.LabelType }}</th>
             <th class="w-16 min-w-16 text-center">{{ $strings.HeaderEpisodes }}</th>
             <th class="w-16 min-w-16 text-center hidden lg:table-cell">{{ $strings.LabelRSSFeedPreventIndexing }}</th>
-            <th class="w-48 min-w-24 flex-grow hidden md:table-cell">{{ $strings.LabelLastUpdate }}</th>
+            <th class="w-48 min-w-24 grow hidden md:table-cell">{{ $strings.LabelLastUpdate }}</th>
             <th class="w-16 text-left"></th>
           </tr>
 
           <tr v-for="feed in feeds" :key="feed.id" class="cursor-pointer h-12" @click="showFeed(feed)">
             <!--  -->
             <td>
-              <img :src="coverUrl(feed)" class="h-full w-full" />
+              <img :src="coverUrl(feed)" class="h-auto w-full" />
             </td>
             <!--  -->
             <td class="w-48 max-w-64 min-w-24 text-left truncate">
               <p class="truncate">{{ feed.meta.title }}</p>
             </td>
             <!--  -->
-            <td class="hidden xl:table-cell">
+            <td class="hidden xl:table-cell max-w-48">
               <p class="truncate">{{ feed.slug }}</p>
             </td>
             <!--  -->
@@ -46,7 +46,7 @@
             <!--  -->
             <td class="text-center leading-none hidden lg:table-cell">
               <p v-if="feed.meta.preventIndexing" class="">
-                <span class="material-icons text-2xl">check</span>
+                <span class="material-symbols text-2xl">check</span>
               </p>
             </td>
             <!--  -->
@@ -57,7 +57,7 @@
             </td>
             <!--  -->
             <td class="text-center">
-              <ui-icon-btn icon="delete" class="mx-0.5" :size="7" bg-color="error" outlined @click.stop="deleteFeedClick(feed)" />
+              <ui-icon-btn icon="delete" class="mx-0.5 text-white/70" borderless :size="7" iconFontSize="1.25rem" outlined @click.stop="deleteFeedClick(feed)" />
             </td>
           </tr>
         </table>
@@ -78,10 +78,10 @@ export default {
   },
   computed: {
     dateFormat() {
-      return this.$store.state.serverSettings.dateFormat
+      return this.$store.getters['getServerSetting']('dateFormat')
     },
     timeFormat() {
-      return this.$store.state.serverSettings.timeFormat
+      return this.$store.getters['getServerSetting']('timeFormat')
     }
   },
   methods: {
@@ -126,7 +126,7 @@ export default {
     },
     coverUrl(feed) {
       if (!feed.coverPath) return `${this.$config.routerBasePath}/Logo.png`
-      return `${feed.feedUrl}/cover`
+      return `${this.$config.routerBasePath}${feed.feedUrl}/cover`
     },
     async loadFeeds() {
       const data = await this.$axios.$get(`/api/feeds`).catch((err) => {
@@ -134,10 +134,19 @@ export default {
         return null
       })
       if (!data) {
-        this.$toast.error('Failed to load RSS feeds')
+        this.$toast.error(this.$strings.ToastFailedToLoadData)
         return
       }
-      this.feeds = data.feeds
+      this.feeds = data.feeds.map((feed) => ({
+        ...feed,
+        episodes: [...feed.episodes].sort((a, b) => {
+          if (!a.pubDate) return 1 // null dates sort to end
+          if (!b.pubDate) return -1
+          const dateA = new Date(a.pubDate)
+          const dateB = new Date(b.pubDate)
+          return dateA - dateB
+        })
+      }))
     },
     init() {
       this.loadFeeds()

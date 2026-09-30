@@ -16,12 +16,13 @@ export default {
     if (!library) {
       return redirect('/oops?message=Library not found')
     }
-    let results = await app.$axios.$get(`/api/libraries/${libraryId}/search?q=${query.q}`).catch((error) => {
+    let results = await app.$axios.$get(`/api/libraries/${libraryId}/search?q=${encodeURIComponent(query.q)}`).catch((error) => {
       console.error('Failed to search library', error)
       return null
     })
     results = {
       podcasts: results?.podcast || [],
+      episodes: results?.episodes || [],
       books: results?.book || [],
       authors: results?.authors || [],
       series: results?.series || [],
@@ -55,12 +56,13 @@ export default {
   },
   methods: {
     async search() {
-      const results = await this.$axios.$get(`/api/libraries/${this.libraryId}/search?q=${this.query}`).catch((error) => {
+      const results = await this.$axios.$get(`/api/libraries/${this.libraryId}/search?q=${encodeURIComponent(this.query)}`).catch((error) => {
         console.error('Failed to search library', error)
         return null
       })
       this.results = {
         podcasts: results?.podcast || [],
+        episodes: results?.episodes || [],
         books: results?.book || [],
         authors: results?.authors || [],
         series: results?.series || [],

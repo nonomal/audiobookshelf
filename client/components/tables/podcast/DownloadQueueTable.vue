@@ -2,7 +2,7 @@
   <div class="w-full my-2">
     <div class="w-full bg-primary px-4 md:px-6 py-2 flex items-center">
       <p class="pr-2 md:pr-4">{{ $strings.HeaderDownloadQueue }}</p>
-      <div class="h-5 md:h-7 w-5 md:w-7 rounded-full bg-white bg-opacity-10 flex items-center justify-center">
+      <div class="h-5 md:h-7 w-5 md:w-7 rounded-full bg-white/10 flex items-center justify-center">
         <span class="text-sm font-mono">{{ queue.length }}</span>
       </div>
     </div>
@@ -20,7 +20,7 @@
               <td class="px-4">
                 <div class="flex items-center">
                   <nuxt-link :to="`/item/${downloadQueued.libraryItemId}`" class="text-sm text-gray-200 hover:underline">{{ downloadQueued.podcastTitle }}</nuxt-link>
-                  <widgets-explicit-indicator :explicit="downloadQueued.podcastExplicit" />
+                  <widgets-explicit-indicator v-if="downloadQueued.podcastExplicit" />
                 </div>
               </td>
               <td>
@@ -30,7 +30,7 @@
                   <widgets-podcast-type-indicator :type="downloadQueued.episodeType" />
                 </div>
               </td>
-              <td class="px-4">
+              <td dir="auto" class="px-4">
                 {{ downloadQueued.episodeDisplayTitle }}
               </td>
               <td class="text-xs">

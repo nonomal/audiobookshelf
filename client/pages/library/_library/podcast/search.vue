@@ -4,8 +4,8 @@
 
     <div id="bookshelf" class="w-full overflow-y-auto px-2 py-6 sm:px-4 md:p-12 relative">
       <div class="w-full max-w-4xl mx-auto flex">
-        <form @submit.prevent="submit" class="flex flex-grow">
-          <ui-text-input v-model="searchInput" type="search" :disabled="processing" placeholder="Enter search term or RSS feed URL" class="flex-grow mr-2 text-sm md:text-base" />
+        <form @submit.prevent="submit" class="flex grow">
+          <ui-text-input v-model="searchInput" type="search" :disabled="processing" :placeholder="$strings.MessagePodcastSearchField" class="grow mr-2 text-sm md:text-base" />
           <ui-btn type="submit" :disabled="processing" class="hidden md:block">{{ $strings.ButtonSubmit }}</ui-btn>
           <ui-btn type="submit" :disabled="processing" class="block md:hidden" small>{{ $strings.ButtonSubmit }}</ui-btn>
         </form>
@@ -14,17 +14,17 @@
       <div class="w-full max-w-3xl mx-auto py-4">
         <p v-if="termSearched && !results.length && !processing" class="text-center text-xl">{{ $strings.MessageNoPodcastsFound }}</p>
         <template v-for="podcast in results">
-          <div :key="podcast.id" class="flex p-1 hover:bg-primary hover:bg-opacity-25 cursor-pointer" @click="selectPodcast(podcast)">
+          <div :key="podcast.id" class="flex p-1 hover:bg-primary/25 cursor-pointer" @click="selectPodcast(podcast)">
             <div class="w-20 min-w-20 h-20 md:w-24 md:min-w-24 md:h-24 bg-primary">
               <img v-if="podcast.cover" :src="podcast.cover" class="h-full w-full" />
             </div>
-            <div class="flex-grow pl-4 max-w-2xl">
+            <div class="grow pl-4 max-w-2xl">
               <div class="flex items-center">
                 <a :href="podcast.pageUrl" class="text-base md:text-lg text-gray-200 hover:underline" target="_blank" @click.stop>{{ podcast.title }}</a>
-                <widgets-explicit-indicator :explicit="podcast.explicit" />
-                <widgets-already-in-library-indicator :already-in-library="podcast.alreadyInLibrary" />
+                <widgets-explicit-indicator v-if="podcast.explicit" />
+                <widgets-already-in-library-indicator v-if="podcast.alreadyInLibrary" />
               </div>
-              <p class="text-sm md:text-base text-gray-300 whitespace-nowrap truncate">by {{ podcast.artistName }}</p>
+              <p class="text-sm md:text-base text-gray-300 whitespace-nowrap truncate">{{ $getString('LabelByAuthor', [podcast.artistName]) }}</p>
               <p class="text-xs text-gray-400 leading-5">{{ podcast.genres.join(', ') }}</p>
               <p class="text-xs text-gray-400 leading-5">{{ podcast.trackCount }} {{ $strings.HeaderEpisodes }}</p>
             </div>
@@ -32,7 +32,7 @@
         </template>
       </div>
 
-      <div v-show="processing" class="absolute top-0 left-0 w-full h-full flex items-center justify-center bg-black bg-opacity-25 z-40">
+      <div v-show="processing" class="absolute top-0 left-0 w-full h-full flex items-center justify-center bg-black/25 z-40">
         <ui-loading-indicator />
       </div>
     </div>
@@ -108,23 +108,28 @@ export default {
 
       if (!txt || !txt.includes('<opml') || !txt.includes('<outline ')) {
         // Quick lazy check for valid OPML
-        this.$toast.error('Invalid OPML file <opml> tag not found OR an <outline> tag was not found')
+        this.$toast.error(this.$strings.MessageTaskOpmlParseFastFail)
         this.processing = false
         return
       }
 
-      await this.$axios
-        .$post(`/api/podcasts/opml`, { opmlText: txt })
+      this.$axios
+        .$post(`/api/podcasts/opml/parse`, { opmlText: txt })
         .then((data) => {
-          console.log(data)
-          this.opmlFeeds = data.feeds || []
-          this.showOPMLFeedsModal = true
+          if (!data.feeds?.length) {
+            this.$toast.error(this.$strings.MessageTaskOpmlParseNoneFound)
+          } else {
+            this.opmlFeeds = data.feeds || []
+            this.showOPMLFeedsModal = true
+          }
         })
         .catch((error) => {
           console.error('Failed', error)
-          this.$toast.error('Failed to parse OPML file')
+          this.$toast.error(this.$strings.MessageTaskOpmlParseFailed)
         })
-      this.processing = false
+        .finally(() => {
+          this.processing = false
+        })
     },
     submit() {
       if (!this.searchInput) return
@@ -141,7 +146,7 @@ export default {
       this.processing = true
       var payload = await this.$axios.$post(`/api/podcasts/feed`, { rssFeed }).catch((error) => {
         console.error('Failed to get feed', error)
-        this.$toast.error('Failed to get podcast feed')
+        this.$toast.error(this.$strings.ToastPodcastGetFeedFailed)
         return null
       })
       this.processing = false
@@ -186,13 +191,13 @@ export default {
         return
       }
       if (!podcast.feedUrl) {
-        this.$toast.error('Invalid podcast - no feed')
+        this.$toast.error(this.$strings.MessageNoPodcastFeed)
         return
       }
       this.processing = true
       const payload = await this.$axios.$post(`/api/podcasts/feed`, { rssFeed: podcast.feedUrl }).catch((error) => {
         console.error('Failed to get feed', error)
-        this.$toast.error('Failed to get podcast feed')
+        this.$toast.error(this.$strings.ToastPodcastGetFeedFailed)
         return null
       })
       this.processing = false
@@ -206,15 +211,15 @@ export default {
     async fetchExistentPodcastsInYourLibrary() {
       this.processing = true
 
-      const podcasts = await this.$axios.$get(`/api/libraries/${this.currentLibraryId}/items?page=0&minified=1`).catch((error) => {
+      const podcastsResponse = await this.$axios.$get(`/api/libraries/${this.currentLibraryId}/podcast-titles`).catch((error) => {
         console.error('Failed to fetch podcasts', error)
         return []
       })
-      this.existentPodcasts = podcasts.results.map((p) => {
+      this.existentPodcasts = podcastsResponse.podcasts.map((p) => {
         return {
-          title: p.media.metadata.title.toLowerCase(),
-          itunesId: p.media.metadata.itunesId,
-          id: p.id
+          title: p.title.toLowerCase(),
+          itunesId: p.itunesId,
+          id: p.libraryItemId
         }
       })
       this.processing = false

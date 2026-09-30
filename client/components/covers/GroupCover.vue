@@ -109,7 +109,7 @@ export default {
 
       if (showCoverBg) {
         var coverbgwrapper = document.createElement('div')
-        coverbgwrapper.className = 'absolute top-0 left-0 w-full h-full overflow-hidden rounded-sm bg-primary'
+        coverbgwrapper.className = 'absolute top-0 left-0 w-full h-full overflow-hidden rounded-xs bg-primary'
 
         var coverbg = document.createElement('div')
         coverbg.className = 'absolute cover-bg'
@@ -121,6 +121,8 @@ export default {
 
       var img = document.createElement('img')
       img.src = src
+      img.alt = `${this.name}, ${this.$strings.LabelCover}`
+      img.ariaHidden = true
       img.className = 'absolute top-0 left-0 w-full h-full'
       img.style.objectFit = showCoverBg ? 'contain' : 'cover'
 

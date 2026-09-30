@@ -11,10 +11,10 @@
       </div>
 
       <template v-for="n in 7">
-        <div :key="n" class="absolute pointer-events-none left-0 h-px bg-white bg-opacity-10" :style="{ top: n * lineSpacing - lineSpacing / 2 + 'px', width: '360px', marginLeft: '24px' }" />
+        <div :key="n" class="absolute pointer-events-none left-0 h-px bg-white/10" :style="{ top: n * lineSpacing - lineSpacing / 2 + 'px', width: '360px', marginLeft: '24px' }" />
 
         <div :key="`dot-${n}`" class="absolute z-10" :style="{ left: points[n - 1].x + 'px', bottom: points[n - 1].y + 'px' }">
-          <ui-tooltip :text="last7DaysOfListening[n - 1].minutesListening" direction="top">
+          <ui-tooltip :text="last7DaysOfListening[n - 1].minutesListening" plaintext direction="top">
             <div class="h-2 w-2 bg-yellow-400 hover:bg-yellow-300 rounded-full transform duration-150 transition-transform hover:scale-125" />
           </ui-tooltip>
         </div>
@@ -35,22 +35,22 @@
     <div class="flex justify-between pt-12">
       <div>
         <p class="text-sm text-center">{{ $strings.LabelStatsWeekListening }}</p>
-        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ totalMinutesListeningThisWeek }}</p>
+        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ $formatNumber(totalMinutesListeningThisWeek) }}</p>
         <p class="text-sm text-center">{{ $strings.LabelStatsMinutes }}</p>
       </div>
       <div>
         <p class="text-sm text-center">{{ $strings.LabelStatsDailyAverage }}</p>
-        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ averageMinutesPerDay }}</p>
+        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ $formatNumber(averageMinutesPerDay) }}</p>
         <p class="text-sm text-center">{{ $strings.LabelStatsMinutes }}</p>
       </div>
       <div>
         <p class="text-sm text-center">{{ $strings.LabelStatsBestDay }}</p>
-        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ mostListenedDay }}</p>
+        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ $formatNumber(mostListenedDay) }}</p>
         <p class="text-sm text-center">{{ $strings.LabelStatsMinutes }}</p>
       </div>
       <div>
         <p class="text-sm text-center">{{ $strings.LabelStatsDays }}</p>
-        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ daysInARow }}</p>
+        <p class="text-5xl font-semibold text-center" style="line-height: 0.85">{{ $formatNumber(daysInARow) }}</p>
         <p class="text-sm text-center">{{ $strings.LabelStatsInARow }}</p>
       </div>
     </div>
@@ -186,10 +186,16 @@ export default {
     daysInARow() {
       var count = 0
       while (true) {
-        var _date = this.$addDaysToToday(count * -1)
-        var datestr = this.$formatJsDate(_date, 'yyyy-MM-dd')
+        const _date = this.$addDaysToToday(count * -1 - 1)
+        const datestr = this.$formatJsDate(_date, 'yyyy-MM-dd')
 
         if (!this.listeningStatsDays[datestr] || this.listeningStatsDays[datestr] === 0) {
+          // don't require listening today to count towards days in a row, but do count it if already listened today
+          const today = this.$formatJsDate(new Date(), 'yyyy-MM-dd')
+          if (this.listeningStatsDays[today]) {
+            count++
+          }
+
           return count
         }
         count++

@@ -10,7 +10,7 @@
           <th class="w-32 hidden sm:table-cell">{{ $strings.LabelCreatedAt }}</th>
           <th class="w-32"></th>
         </tr>
-        <tr v-for="user in users" :key="user.id" class="cursor-pointer" :class="user.isActive ? '' : 'bg-error bg-opacity-20'" @click="$router.push(`/config/users/${user.id}`)">
+        <tr v-for="user in users" :key="user.id" class="cursor-pointer" :class="user.isActive ? '' : 'bg-error/10!'" @click="$router.push(`/config/users/${user.id}`)">
           <td>
             <div class="flex items-center">
               <widgets-online-indicator :value="!!usersOnline[user.id]" />
@@ -41,11 +41,11 @@
           <td class="py-0">
             <div class="w-full flex justify-left">
               <!-- Dont show edit for non-root users -->
-              <div v-if="user.type !== 'root' || userIsRoot" class="h-8 w-8 flex items-center justify-center text-white text-opacity-50 hover:text-opacity-100 cursor-pointer" @click.stop="editUser(user)">
-                <button type="button" :aria-label="$getString('ButtonUserEdit', [user.username])" class="material-icons text-base">edit</button>
+              <div v-if="user.type !== 'root' || userIsRoot" class="h-8 w-8 flex items-center justify-center text-white/50 hover:text-white/100 cursor-pointer" @click.stop="editUser(user)">
+                <button type="button" :aria-label="$getString('ButtonUserEdit', [user.username])" class="material-symbols text-base">edit</button>
               </div>
-              <div v-show="user.type !== 'root'" class="h-8 w-8 flex items-center justify-center text-white text-opacity-50 hover:text-error cursor-pointer" @click.stop="deleteUserClick(user)">
-                <button type="button" :aria-label="$getString('ButtonUserDelete', [user.username])" class="material-icons text-base">delete</button>
+              <div v-show="user.type !== 'root' && user.id !== currentUserId" class="h-8 w-8 flex items-center justify-center text-white/50 hover:text-error cursor-pointer" @click.stop="deleteUserClick(user)">
+                <button type="button" :aria-label="$getString('ButtonUserDelete', [user.username])" class="material-symbols text-base">delete</button>
               </div>
             </div>
           </td>
@@ -76,10 +76,10 @@ export default {
       return usermap
     },
     dateFormat() {
-      return this.$store.state.serverSettings.dateFormat
+      return this.$store.getters['getServerSetting']('dateFormat')
     },
     timeFormat() {
-      return this.$store.state.serverSettings.timeFormat
+      return this.$store.getters['getServerSetting']('timeFormat')
     }
   },
   methods: {
@@ -91,24 +91,36 @@ export default {
     },
     deleteUserClick(user) {
       if (this.isDeletingUser) return
-      if (confirm(this.$getString('MessageRemoveUserWarning', [user.username]))) {
-        this.isDeletingUser = true
-        this.$axios
-          .$delete(`/api/users/${user.id}`)
-          .then((data) => {
-            this.isDeletingUser = false
-            if (data.error) {
-              this.$toast.error(data.error)
-            } else {
-              this.$toast.success(this.$strings.ToastUserDeleteSuccess)
-            }
-          })
-          .catch((error) => {
-            console.error('Failed to delete user', error)
-            this.$toast.error(this.$strings.ToastUserDeleteFailed)
-            this.isDeletingUser = false
-          })
+
+      const payload = {
+        message: this.$getString('MessageRemoveUserWarning', [user.username]),
+        callback: (confirmed) => {
+          if (confirmed) {
+            this.deleteUser(user)
+          }
+        },
+        type: 'yesNo'
       }
+      this.$store.commit('globals/setConfirmPrompt', payload)
+    },
+    deleteUser(user) {
+      this.isDeletingUser = true
+      this.$axios
+        .$delete(`/api/users/${user.id}`)
+        .then((data) => {
+          if (data.error) {
+            this.$toast.error(data.error)
+          } else {
+            this.$toast.success(this.$strings.ToastUserDeleteSuccess)
+          }
+        })
+        .catch((error) => {
+          console.error('Failed to delete user', error)
+          this.$toast.error(this.$strings.ToastUserDeleteFailed)
+        })
+        .finally(() => {
+          this.isDeletingUser = false
+        })
     },
     editUser(user) {
       this.$emit('edit', user)
@@ -120,6 +132,7 @@ export default {
           this.users = res.users.sort((a, b) => {
             return a.createdAt - b.createdAt
           })
+          this.$emit('numUsers', this.users.length)
         })
         .catch((error) => {
           console.error('Failed', error)
@@ -157,10 +170,6 @@ export default {
     this.init()
   },
   beforeDestroy() {
-    if (this.$refs.accountModal) {
-      this.$refs.accountModal.close()
-    }
-
     if (this.$root.socket) {
       this.$root.socket.off('user_added', this.addUpdateUser)
       this.$root.socket.off('user_updated', this.addUpdateUser)

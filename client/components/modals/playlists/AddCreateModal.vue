@@ -6,7 +6,7 @@
       </div>
     </template>
 
-    <div ref="container" class="w-full rounded-lg bg-primary box-shadow-md overflow-y-auto overflow-x-hidden" style="max-height: 80vh">
+    <div ref="container" class="w-full rounded-lg bg-bg box-shadow-md overflow-y-auto overflow-x-hidden" style="max-height: 80vh">
       <div v-if="show" class="w-full h-full">
         <div class="py-4 px-4">
           <h1 v-if="!isBatch" class="text-2xl">{{ $strings.LabelAddToPlaylist }}</h1>
@@ -19,16 +19,26 @@
             </template>
           </transition-group>
         </div>
-        <div v-if="!playlists.length" class="flex h-32 items-center justify-center">
-          <p class="text-xl">{{ $strings.MessageNoUserPlaylists }}</p>
+        <div v-if="!playlists.length" class="flex h-32 items-center justify-center text-center px-2">
+          <div>
+            <p class="text-xl mb-2">{{ $strings.MessageNoUserPlaylists }}</p>
+            <div class="text-sm flex items-center justify-center text-gray-200">
+              <p>{{ $strings.MessageNoUserPlaylistsHelp }}</p>
+              <ui-tooltip :text="$strings.LabelClickForMoreInfo" class="inline-flex ml-2">
+                <a href="https://audiobookshelf.org/docs/documentation/libraries/common-content/playlists" target="_blank" class="inline-flex">
+                  <span class="material-symbols text-xl w-5 text-gray-200">help_outline</span>
+                </a>
+              </ui-tooltip>
+            </div>
+          </div>
         </div>
-        <div class="w-full h-px bg-white bg-opacity-10" />
+        <div class="w-full h-px bg-white/10" />
         <form @submit.prevent="submitCreatePlaylist">
-          <div class="flex px-4 py-2 items-center text-center border-b border-white border-opacity-10 text-white text-opacity-80">
-            <div class="flex-grow px-2">
+          <div class="flex px-4 py-2 items-center text-center border-b border-white/10 text-white/80">
+            <div class="grow px-2">
               <ui-text-input v-model="newPlaylistName" :placeholder="$strings.PlaceholderNewPlaylist" class="w-full" />
             </div>
-            <ui-btn type="submit" color="success" :padding-x="4" class="h-10">{{ $strings.ButtonCreate }}</ui-btn>
+            <ui-btn type="submit" color="bg-success" :padding-x="4" class="h-10">{{ $strings.ButtonCreate }}</ui-btn>
           </div>
         </form>
       </div>
@@ -87,7 +97,10 @@ export default {
             ...playlist
           }
         })
-        .sort((a, b) => (a.isItemIncluded ? -1 : 1))
+        .sort((a, b) => {
+          if (a.isItemIncluded !== b.isItemIncluded) return a.isItemIncluded ? -1 : 1
+          return a.name.localeCompare(b.name)
+        })
     },
     isBatch() {
       return this.selectedPlaylistItems.length > 1
@@ -115,7 +128,7 @@ export default {
         })
         .catch((error) => {
           console.error('Failed to get playlists', error)
-          this.$toast.error('Failed to load user playlists')
+          this.$toast.error(this.$strings.ToastFailedToLoadData)
         })
         .finally(() => {
           this.processing = false
@@ -130,12 +143,11 @@ export default {
         .$post(`/api/playlists/${playlist.id}/batch/remove`, { items: itemObjects })
         .then((updatedPlaylist) => {
           console.log(`Items removed from playlist`, updatedPlaylist)
-          this.$toast.success('Playlist item(s) removed')
           this.processing = false
         })
         .catch((error) => {
           console.error('Failed to remove items from playlist', error)
-          this.$toast.error('Failed to remove playlist item(s)')
+          this.$toast.error(this.$strings.ToastFailedToUpdate)
           this.processing = false
         })
     },
@@ -148,12 +160,11 @@ export default {
         .$post(`/api/playlists/${playlist.id}/batch/add`, { items: itemObjects })
         .then((updatedPlaylist) => {
           console.log(`Items added to playlist`, updatedPlaylist)
-          this.$toast.success('Items added to playlist')
           this.processing = false
         })
         .catch((error) => {
           console.error('Failed to add items to playlist', error)
-          this.$toast.error('Failed to add items to playlist')
+          this.$toast.error(this.$strings.ToastFailedToUpdate)
           this.processing = false
         })
     },
@@ -174,14 +185,13 @@ export default {
         .$post('/api/playlists', newPlaylist)
         .then((data) => {
           console.log('New playlist created', data)
-          this.$toast.success(`Playlist "${data.name}" created`)
           this.processing = false
           this.newPlaylistName = ''
         })
         .catch((error) => {
           console.error('Failed to create playlist', error)
           var errMsg = error.response ? error.response.data || '' : ''
-          this.$toast.error(`Failed to create playlist: ${errMsg}`)
+          this.$toast.error(this.$strings.ToastPlaylistCreateFailed + ': ' + errMsg)
           this.processing = false
         })
     }

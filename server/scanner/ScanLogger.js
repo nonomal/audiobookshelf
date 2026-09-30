@@ -1,6 +1,5 @@
-const uuidv4 = require("uuid").v4
+const uuidv4 = require('uuid').v4
 const Logger = require('../Logger')
-const { LogLevel } = require('../utils/constants')
 
 class ScanLogger {
   constructor() {
@@ -15,6 +14,8 @@ class ScanLogger {
 
     /** @type {string[]} */
     this.authorsRemovedFromBooks = []
+    /** @type {Set<string>} */
+    this.authorsNumBooksChangedIds = new Set()
     /** @type {string[]} */
     this.seriesRemovedFromBooks = []
 
@@ -44,20 +45,11 @@ class ScanLogger {
     this.elapsed = this.finishedAt - this.startedAt
   }
 
-  getLogLevelString(level) {
-    for (const key in LogLevel) {
-      if (LogLevel[key] === level) {
-        return key
-      }
-    }
-    return 'UNKNOWN'
-  }
-
   addLog(level, ...args) {
     const logObj = {
-      timestamp: (new Date()).toISOString(),
+      timestamp: new Date().toISOString(),
       message: args.join(' '),
-      levelName: this.getLogLevelString(level),
+      levelName: Logger.getLogLevelString(level),
       level
     }
 

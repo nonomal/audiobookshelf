@@ -1,8 +1,8 @@
 <template>
-  <div class="bg-bg rounded-md shadow-lg border border-white border-opacity-5 p-4 mb-8 relative" style="min-height: 200px">
+  <div class="bg-bg rounded-md shadow-lg border border-white/5 p-4 mb-8 relative" style="min-height: 200px">
     <div class="flex items-center mb-4">
-      <nuxt-link to="/config/item-metadata-utils" class="w-8 h-8 flex items-center justify-center rounded-full cursor-pointer hover:bg-white hover:bg-opacity-10 text-center">
-        <span class="material-icons text-2xl">arrow_back</span>
+      <nuxt-link to="/config/item-metadata-utils" class="w-8 h-8 flex items-center justify-center rounded-full cursor-pointer hover:bg-white/10 text-center">
+        <span class="material-symbols text-2xl">arrow_back</span>
       </nuxt-link>
 
       <h1 class="text-xl mx-2">{{ $strings.HeaderManageGenres }}</h1>
@@ -15,13 +15,13 @@
         <div :key="genre" class="w-full p-2 flex items-center text-gray-400 hover:text-white" :class="{ 'bg-primary/20': index % 2 === 0 }">
           <p v-if="editingGenre !== genre" class="text-sm md:text-base text-gray-100">{{ genre }}</p>
           <ui-text-input v-else v-model="newGenreName" />
-          <div class="flex-grow" />
+          <div class="grow" />
           <template v-if="editingGenre !== genre">
             <ui-icon-btn v-if="editingGenre !== genre" icon="edit" borderless :size="8" icon-font-size="1.1rem" class="mx-1" @click="editClick(genre)" />
             <ui-icon-btn v-if="editingGenre !== genre" icon="delete" borderless :size="8" icon-font-size="1.1rem" @click="removeClick(genre)" />
           </template>
           <template v-else>
-            <ui-btn color="success" small class="mx-2" @click.stop="saveClick">{{ $strings.ButtonSave }}</ui-btn>
+            <ui-btn color="bg-success" small class="mx-2" @click.stop="saveClick">{{ $strings.ButtonSave }}</ui-btn>
             <ui-btn small @click.stop="cancelEditClick">{{ $strings.ButtonCancel }}</ui-btn>
           </template>
         </div>
@@ -90,9 +90,9 @@ export default {
 
       let message = this.$getString('MessageConfirmRenameGenre', [this.editingGenre, this.newGenreName])
       if (genreNameExists) {
-        message += `<br><span class="text-sm">${this.$strings.MessageConfirmRenameGenreMergeNote}</span>`
+        message += ` ${this.$strings.MessageConfirmRenameGenreMergeNote}`
       } else if (genreNameExistsOfDifferentCase) {
-        message += `<br><span class="text-warning text-sm">${this.$getString('MessageConfirmRenameGenreWarning', [genreNameExistsOfDifferentCase])}</span>`
+        message += ` ${this.$getString('MessageConfirmRenameGenreWarning', [genreNameExistsOfDifferentCase])}`
       }
 
       const payload = {
@@ -130,7 +130,7 @@ export default {
         })
         .catch((error) => {
           console.error('Failed to rename genre', error)
-          this.$toast.error('Failed to rename genre')
+          this.$toast.error(this.$strings.ToastRenameFailed)
         })
         .finally(() => {
           this.loading = false
@@ -147,7 +147,7 @@ export default {
         })
         .catch((error) => {
           console.error('Failed to remove genre', error)
-          this.$toast.error('Failed to remove genre')
+          this.$toast.error(this.$strings.ToastRemoveFailed)
         })
         .finally(() => {
           this.loading = false

@@ -4,22 +4,31 @@ on:
   pull_request:
   push:
     branches-ignore:
-      - 'dependabot/**'  # Don't run dependabot branches, as they are already covered by pull requests
+      - 'dependabot/**' # Don't run dependabot branches, as they are already covered by pull requests
+    # Only build when files in these directories have been changed
+    paths:
+      - client/**
+      - server/**
+      - test/**
+      - index.js
+      - package.json
+      - tsconfig.server.json
 
 jobs:
   build:
     name: build and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: setup nade
-        uses: actions/setup-node@v3
+      - name: setup node
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: 'npm'
 
-      - name: install pkg
-        run: npm install -g pkg
+      - name: install pkg (using yao-pkg fork for targeting node24)
+        run: npm install -g @yao-pkg/pkg
 
       - name: get client dependencies
         working-directory: client
@@ -29,11 +38,11 @@ jobs:
         working-directory: client
         run: npm run generate
 
-      - name: get server dependencies
-        run: npm ci --only=production
+      - name: get server dependencies and compile server
+        run: npm ci && npm run build:server && npm prune --omit=dev
 
       - name: build binary
-        run: pkg -t node18-linux-x64 -o audiobookshelf .
+        run: pkg --config package.json -t node24-linux-x64 -o audiobookshelf dist-server/index.js
 
       - name: run audiobookshelf
         run: |

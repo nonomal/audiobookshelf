@@ -5,20 +5,25 @@ const libraryItemsBookFilters = require('./libraryItemsBookFilters')
 
 module.exports = {
   decode(text) {
-    return Buffer.from(decodeURIComponent(text), 'base64').toString()
+    try {
+      return Buffer.from(decodeURIComponent(text), 'base64').toString()
+    } catch (error) {
+      Logger.warn(`[seriesFilters] Failed to decode filter value "${text}": ${error.message}`)
+      return null
+    }
   },
 
   /**
    * Get series filtered and sorted
-   * 
-   * @param {import('../../objects/Library')} library 
-   * @param {import('../../objects/user/User')} user 
-   * @param {string} filterBy 
-   * @param {string} sortBy 
-   * @param {boolean} sortDesc 
-   * @param {string[]} include 
-   * @param {number} limit 
-   * @param {number} offset 
+   *
+   * @param {import('../../models/Library')} library
+   * @param {import('../../models/User')} user
+   * @param {string} filterBy
+   * @param {string} sortBy
+   * @param {boolean} sortDesc
+   * @param {string[]} include
+   * @param {number} limit
+   * @param {number} offset
    * @returns {Promise<{ series:object[], count:number }>}
    */
   async getFilteredSeries(library, user, filterBy, sortBy, sortDesc, include, limit, offset) {
@@ -26,7 +31,7 @@ module.exports = {
     let filterGroup = null
     if (filterBy) {
       const searchGroups = ['genres', 'tags', 'authors', 'progress', 'narrators', 'publishers', 'languages']
-      const group = searchGroups.find(_group => filterBy.startsWith(_group + '.'))
+      const group = searchGroups.find((_group) => filterBy.startsWith(_group + '.'))
       filterGroup = group || filterBy
       filterValue = group ? this.decode(filterBy.replace(`${group}.`, '')) : null
     }
@@ -49,9 +54,11 @@ module.exports = {
     // Handle library setting to hide single book series
     // TODO: Merge with existing query
     if (library.settings.hideSingleBookSeries) {
-      seriesWhere.push(Sequelize.where(Sequelize.literal(`(SELECT count(*) FROM books b, bookSeries bs WHERE bs.seriesId = series.id AND bs.bookId = b.id)`), {
-        [Sequelize.Op.gt]: 1
-      }))
+      seriesWhere.push(
+        Sequelize.where(Sequelize.literal(`(SELECT count(*) FROM books b, bookSeries bs WHERE bs.seriesId = series.id AND bs.bookId = b.id)`), {
+          [Sequelize.Op.gt]: 1
+        })
+      )
     }
 
     // Handle filters
@@ -71,15 +78,19 @@ module.exports = {
       userPermissionBookWhere.replacements.filterValue = filterValue
     } else if (filterGroup === 'progress') {
       if (filterValue === 'not-finished') {
-        attrQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.isFinished IS NULL OR mp.isFinished = 0)'
+        attrQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id AND mp.userId = :userId WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.isFinished IS NULL OR mp.isFinished = 0)'
+        userPermissionBookWhere.replacements.userId = user.id
       } else if (filterValue === 'finished') {
-        const progQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.isFinished IS NULL OR mp.isFinished = 0)'
+        const progQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id AND mp.userId = :userId WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.isFinished IS NULL OR mp.isFinished = 0)'
         seriesWhere.push(Sequelize.where(Sequelize.literal(`(${progQuery})`), 0))
+        userPermissionBookWhere.replacements.userId = user.id
       } else if (filterValue === 'not-started') {
-        const progQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.isFinished = 1 OR mp.currentTime > 0)'
+        const progQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id AND mp.userId = :userId WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.isFinished = 1 OR mp.currentTime > 0)'
         seriesWhere.push(Sequelize.where(Sequelize.literal(`(${progQuery})`), 0))
+        userPermissionBookWhere.replacements.userId = user.id
       } else if (filterValue === 'in-progress') {
-        attrQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.currentTime > 0 OR mp.ebookProgress > 0) AND mp.isFinished = 0'
+        attrQuery = 'SELECT count(*) FROM books b, bookSeries bs LEFT OUTER JOIN mediaProgresses mp ON mp.mediaItemId = b.id AND mp.userId = :userId WHERE bs.seriesId = series.id AND bs.bookId = b.id AND (mp.currentTime > 0 OR mp.ebookProgress > 0) AND mp.isFinished = 0'
+        userPermissionBookWhere.replacements.userId = user.id
       }
     }
 
@@ -91,7 +102,7 @@ module.exports = {
       if (!user.canAccessExplicitContent) {
         attrQuery += ' AND b.explicit = 0'
       }
-      if (!user.permissions.accessAllTags && user.itemTagsSelected.length) {
+      if (!user.permissions?.accessAllTags && user.permissions?.itemTagsSelected?.length) {
         if (user.permissions.selectedTagsNotAccessible) {
           attrQuery += ' AND (SELECT count(*) FROM json_each(tags) WHERE json_valid(tags) AND json_each.value IN (:userTagsSelected)) = 0'
         } else {
@@ -101,9 +112,11 @@ module.exports = {
     }
 
     if (attrQuery) {
-      seriesWhere.push(Sequelize.where(Sequelize.literal(`(${attrQuery})`), {
-        [Sequelize.Op.gt]: 0
-      }))
+      seriesWhere.push(
+        Sequelize.where(Sequelize.literal(`(${attrQuery})`), {
+          [Sequelize.Op.gt]: 0
+        })
+      )
     }
 
     const order = []
@@ -133,6 +146,8 @@ module.exports = {
     } else if (sortBy === 'lastBookUpdated') {
       seriesAttributes.include.push([Sequelize.literal('(SELECT MAX(b.updatedAt) FROM books b, bookSeries bs WHERE bs.seriesId = series.id AND b.id = bs.bookId)'), 'mostRecentBookUpdated'])
       order.push(['mostRecentBookUpdated', dir])
+    } else if (sortBy === 'random') {
+      order.push(Database.sequelize.random())
     }
 
     const { rows: series, count } = await Database.seriesModel.findAndCountAll({
@@ -152,6 +167,12 @@ module.exports = {
             include: [
               {
                 model: Database.libraryItemModel
+              },
+              {
+                model: Database.authorModel
+              },
+              {
+                model: Database.seriesModel
               }
             ]
           },
@@ -165,14 +186,14 @@ module.exports = {
     // Map series to old series
     const allOldSeries = []
     for (const s of series) {
-      const oldSeries = s.getOldSeries().toJSON()
+      const oldSeries = s.toOldJSON()
 
       if (s.dataValues.totalDuration) {
         oldSeries.totalDuration = s.dataValues.totalDuration
       }
 
       if (s.feeds?.length) {
-        oldSeries.rssFeed = Database.feedModel.getOldFeed(s.feeds[0]).toJSONMinified()
+        oldSeries.rssFeed = s.feeds[0].toOldJSONMinified()
       }
 
       // TODO: Sort books by sequence in query
@@ -184,11 +205,11 @@ module.exports = {
           sensitivity: 'base'
         })
       })
-      oldSeries.books = s.bookSeries.map(bs => {
-        const libraryItem = bs.book.libraryItem.toJSON()
+      oldSeries.books = s.bookSeries.map((bs) => {
+        const libraryItem = bs.book.libraryItem
         delete bs.book.libraryItem
         libraryItem.media = bs.book
-        const oldLibraryItem = Database.libraryItemModel.getOldLibraryItem(libraryItem).toJSONMinified()
+        const oldLibraryItem = libraryItem.toOldJSONMinified()
         return oldLibraryItem
       })
       allOldSeries.push(oldSeries)

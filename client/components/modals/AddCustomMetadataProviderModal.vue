@@ -2,7 +2,7 @@
   <modals-modal ref="modal" v-model="show" name="custom-metadata-provider" :width="600" :height="'unset'" :processing="processing">
     <template #outer>
       <div class="absolute top-0 left-0 p-5 w-2/3 overflow-hidden">
-        <p class="text-3xl text-white truncate">Add custom metadata provider</p>
+        <p class="text-3xl text-white truncate">{{ $strings.HeaderAddCustomMetadataProvider }}</p>
       </div>
     </template>
     <form @submit.prevent="submitForm">
@@ -10,21 +10,21 @@
         <div class="w-full p-8">
           <div class="flex mb-2">
             <div class="w-3/4 p-1">
-              <ui-text-input-with-label v-model="newName" :label="$strings.LabelName" />
+              <ui-text-input-with-label v-model="newName" :label="$strings.LabelName" trim-whitespace />
             </div>
             <div class="w-1/4 p-1">
               <ui-text-input-with-label value="Book" readonly :label="$strings.LabelMediaType" />
             </div>
           </div>
           <div class="w-full mb-2 p-1">
-            <ui-text-input-with-label v-model="newUrl" label="URL" />
+            <ui-text-input-with-label v-model="newUrl" label="URL" trim-whitespace />
           </div>
           <div class="w-full mb-2 p-1">
-            <ui-text-input-with-label v-model="newAuthHeaderValue" :label="'Authorization Header Value'" type="password" />
+            <ui-text-input-with-label v-model="newAuthHeaderValue" :label="$strings.LabelProviderAuthorizationValue" type="password" />
           </div>
           <div class="flex px-1 pt-4">
-            <div class="flex-grow" />
-            <ui-btn color="success" type="submit">{{ $strings.ButtonAdd }}</ui-btn>
+            <div class="grow" />
+            <ui-btn color="bg-success" type="submit">{{ $strings.ButtonAdd }}</ui-btn>
           </div>
         </div>
       </div>
@@ -65,9 +65,13 @@ export default {
     }
   },
   methods: {
-    submitForm() {
+    async submitForm() {
+      // Remove focus from active input
+      document.activeElement?.blur?.()
+      await this.$nextTick()
+
       if (!this.newName || !this.newUrl) {
-        this.$toast.error('Must add name and url')
+        this.$toast.error(this.$strings.ToastProviderNameAndUrlRequired)
         return
       }
 
@@ -81,13 +85,13 @@ export default {
         })
         .then((data) => {
           this.$emit('added', data.provider)
-          this.$toast.success('New provider added')
+          this.$toast.success(this.$strings.ToastProviderCreatedSuccess)
           this.show = false
         })
         .catch((error) => {
           const errorMsg = error.response?.data || 'Unknown error'
           console.error('Failed to add provider', error)
-          this.$toast.error('Failed to add provider: ' + errorMsg)
+          this.$toast.error(this.$strings.ToastProviderCreatedFailed + ': ' + errorMsg)
         })
         .finally(() => {
           this.processing = false

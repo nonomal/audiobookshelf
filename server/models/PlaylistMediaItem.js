@@ -16,15 +16,11 @@ class PlaylistMediaItem extends Model {
     this.playlistId
     /** @type {Date} */
     this.createdAt
-  }
 
-  static removeByIds(playlistId, mediaItemId) {
-    return this.destroy({
-      where: {
-        playlistId,
-        mediaItemId
-      }
-    })
+    // Expanded properties
+
+    /** @type {import('./Book')|import('./PodcastEpisode')} - only set when expanded */
+    this.mediaItem
   }
 
   getMediaItem(options) {
@@ -35,24 +31,27 @@ class PlaylistMediaItem extends Model {
 
   /**
    * Initialize model
-   * @param {import('../Database').sequelize} sequelize 
+   * @param {import('../Database').sequelize} sequelize
    */
   static init(sequelize) {
-    super.init({
-      id: {
-        type: DataTypes.UUID,
-        defaultValue: DataTypes.UUIDV4,
-        primaryKey: true
+    super.init(
+      {
+        id: {
+          type: DataTypes.UUID,
+          defaultValue: DataTypes.UUIDV4,
+          primaryKey: true
+        },
+        mediaItemId: DataTypes.UUID,
+        mediaItemType: DataTypes.STRING,
+        order: DataTypes.INTEGER
       },
-      mediaItemId: DataTypes.UUIDV4,
-      mediaItemType: DataTypes.STRING,
-      order: DataTypes.INTEGER
-    }, {
-      sequelize,
-      timestamps: true,
-      updatedAt: false,
-      modelName: 'playlistMediaItem'
-    })
+      {
+        sequelize,
+        timestamps: true,
+        updatedAt: false,
+        modelName: 'playlistMediaItem'
+      }
+    )
 
     const { book, podcastEpisode, playlist } = sequelize.models
 
@@ -74,7 +73,7 @@ class PlaylistMediaItem extends Model {
     })
     PlaylistMediaItem.belongsTo(podcastEpisode, { foreignKey: 'mediaItemId', constraints: false })
 
-    PlaylistMediaItem.addHook('afterFind', findResult => {
+    PlaylistMediaItem.addHook('afterFind', (findResult) => {
       if (!findResult) return
 
       if (!Array.isArray(findResult)) findResult = [findResult]

@@ -1,7 +1,7 @@
 <template>
   <tr>
     <td class="px-4">
-      {{ showFullPath ? file.metadata.path : file.metadata.relPath }} <ui-tooltip :text="$strings.LabelPrimaryEbook" class="inline-block"><span v-if="isPrimary" class="material-icons-outlined text-success align-text-bottom">check_circle</span></ui-tooltip>
+      {{ showFullPath ? file.metadata.path : file.metadata.relPath }} <ui-tooltip :text="$strings.LabelPrimaryEbook" class="inline-block"><span v-if="isPrimary" class="material-symbols text-success align-text-bottom">check_circle</span></ui-tooltip>
     </td>
     <td>
       {{ $bytesPretty(file.metadata.size) }}
@@ -115,11 +115,11 @@ export default {
             this.$axios
               .$delete(`/api/items/${this.libraryItemId}/file/${this.file.ino}`)
               .then(() => {
-                this.$toast.success('File deleted')
+                this.$toast.success(this.$strings.ToastDeleteFileSuccess)
               })
               .catch((error) => {
                 console.error('Failed to delete file', error)
-                this.$toast.error('Failed to delete file')
+                this.$toast.error(this.$strings.ToastDeleteFileFailed)
               })
               .finally(() => {
                 this.processing = false

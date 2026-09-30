@@ -1,8 +1,10 @@
+const Path = require('path')
 const { DataTypes, Model } = require('sequelize')
+const fsExtra = require('../libs/fsExtra')
 const Logger = require('../Logger')
-const oldLibraryItem = require('../objects/LibraryItem')
 const libraryFilters = require('../utils/queries/libraryFilters')
-const { areEquivalent } = require('../utils/index')
+const { filePathToPOSIX, getFileTimestampsWithIno } = require('../utils/fileUtils')
+const LibraryFile = require('../objects/files/LibraryFile')
 const Book = require('./Book')
 const Podcast = require('./Podcast')
 
@@ -17,8 +19,8 @@ const Podcast = require('./Podcast')
 
 /**
  * @typedef LibraryItemExpandedProperties
- * @property {Book.BookExpanded|Podcast.PodcastExpanded} media 
- * 
+ * @property {Book.BookExpanded|Podcast.PodcastExpanded} media
+ *
  * @typedef {LibraryItem & LibraryItemExpandedProperties} LibraryItemExpanded
  */
 
@@ -68,12 +70,23 @@ class LibraryItem extends Model {
     this.createdAt
     /** @type {Date} */
     this.updatedAt
+
+    /** @type {Book.BookExpanded|Podcast.PodcastExpanded} - only set when expanded */
+    this.media
+    /** @type {string} */
+    this.title // Only used for sorting
+    /** @type {string} */
+    this.titleIgnorePrefix // Only used for sorting
+    /** @type {string} */
+    this.authorNamesFirstLast // Only used for sorting
+    /** @type {string} */
+    this.authorNamesLastFirst // Only used for sorting
   }
 
   /**
    * Gets library items partially expanded, not including podcast episodes
    * @todo temporary solution
-   * 
+   *
    * @param {number} offset
    * @param {number} limit
    * @returns {Promise<LibraryItem[]>} LibraryItem
@@ -94,7 +107,7 @@ class LibraryItem extends Model {
             {
               model: this.sequelize.models.series,
               through: {
-                attributes: ['sequence', 'createdAt']
+                attributes: ['id', 'sequence', 'createdAt']
               }
             }
           ]
@@ -115,124 +128,28 @@ class LibraryItem extends Model {
   }
 
   /**
-   * Currently unused because this is too slow and uses too much mem
-   * @param {import('sequelize').WhereOptions} [where]
-   * @returns {Array<objects.LibraryItem>} old library items
+   * Remove library item by id
+   *
+   * @param {string} libraryItemId
+   * @returns {Promise<number>} The number of destroyed rows
    */
-  static async getAllOldLibraryItems(where = null) {
-    let libraryItems = await this.findAll({
+  static removeById(libraryItemId) {
+    return this.destroy({
+      where: {
+        id: libraryItemId
+      },
+      individualHooks: true
+    })
+  }
+
+  /**
+   *
+   * @param {import('sequelize').WhereOptions} where
+   * @returns {Promise<LibraryItemExpanded[]>}
+   */
+  static async findAllExpandedWhere(where = null) {
+    return this.findAll({
       where,
-      include: [
-        {
-          model: this.sequelize.models.book,
-          include: [
-            {
-              model: this.sequelize.models.author,
-              through: {
-                attributes: []
-              }
-            },
-            {
-              model: this.sequelize.models.series,
-              through: {
-                attributes: ['sequence']
-              }
-            }
-          ]
-        },
-        {
-          model: this.sequelize.models.podcast,
-          include: [
-            {
-              model: this.sequelize.models.podcastEpisode
-            }
-          ]
-        }
-      ]
-    })
-    return libraryItems.map(ti => this.getOldLibraryItem(ti))
-  }
-
-  /**
-   * Convert an expanded LibraryItem into an old library item
-   * 
-   * @param {Model<LibraryItem>} libraryItemExpanded 
-   * @returns {oldLibraryItem}
-   */
-  static getOldLibraryItem(libraryItemExpanded) {
-    let media = null
-    if (libraryItemExpanded.mediaType === 'book') {
-      media = this.sequelize.models.book.getOldBook(libraryItemExpanded)
-    } else if (libraryItemExpanded.mediaType === 'podcast') {
-      media = this.sequelize.models.podcast.getOldPodcast(libraryItemExpanded)
-    }
-
-    return new oldLibraryItem({
-      id: libraryItemExpanded.id,
-      ino: libraryItemExpanded.ino,
-      oldLibraryItemId: libraryItemExpanded.extraData?.oldLibraryItemId || null,
-      libraryId: libraryItemExpanded.libraryId,
-      folderId: libraryItemExpanded.libraryFolderId,
-      path: libraryItemExpanded.path,
-      relPath: libraryItemExpanded.relPath,
-      isFile: libraryItemExpanded.isFile,
-      mtimeMs: libraryItemExpanded.mtime?.valueOf(),
-      ctimeMs: libraryItemExpanded.ctime?.valueOf(),
-      birthtimeMs: libraryItemExpanded.birthtime?.valueOf(),
-      addedAt: libraryItemExpanded.createdAt.valueOf(),
-      updatedAt: libraryItemExpanded.updatedAt.valueOf(),
-      lastScan: libraryItemExpanded.lastScan?.valueOf(),
-      scanVersion: libraryItemExpanded.lastScanVersion,
-      isMissing: !!libraryItemExpanded.isMissing,
-      isInvalid: !!libraryItemExpanded.isInvalid,
-      mediaType: libraryItemExpanded.mediaType,
-      media,
-      libraryFiles: libraryItemExpanded.libraryFiles
-    })
-  }
-
-  static async fullCreateFromOld(oldLibraryItem) {
-    const newLibraryItem = await this.create(this.getFromOld(oldLibraryItem))
-
-    if (oldLibraryItem.mediaType === 'book') {
-      const bookObj = this.sequelize.models.book.getFromOld(oldLibraryItem.media)
-      bookObj.libraryItemId = newLibraryItem.id
-      const newBook = await this.sequelize.models.book.create(bookObj)
-
-      const oldBookAuthors = oldLibraryItem.media.metadata.authors || []
-      const oldBookSeriesAll = oldLibraryItem.media.metadata.series || []
-
-      for (const oldBookAuthor of oldBookAuthors) {
-        await this.sequelize.models.bookAuthor.create({ authorId: oldBookAuthor.id, bookId: newBook.id })
-      }
-      for (const oldSeries of oldBookSeriesAll) {
-        await this.sequelize.models.bookSeries.create({ seriesId: oldSeries.id, bookId: newBook.id, sequence: oldSeries.sequence })
-      }
-    } else if (oldLibraryItem.mediaType === 'podcast') {
-      const podcastObj = this.sequelize.models.podcast.getFromOld(oldLibraryItem.media)
-      podcastObj.libraryItemId = newLibraryItem.id
-      const newPodcast = await this.sequelize.models.podcast.create(podcastObj)
-
-      const oldEpisodes = oldLibraryItem.media.episodes || []
-      for (const oldEpisode of oldEpisodes) {
-        const episodeObj = this.sequelize.models.podcastEpisode.getFromOld(oldEpisode)
-        episodeObj.libraryItemId = newLibraryItem.id
-        episodeObj.podcastId = newPodcast.id
-        await this.sequelize.models.podcastEpisode.create(episodeObj)
-      }
-    }
-
-    return newLibraryItem
-  }
-
-  /**
-   * Updates libraryItem, book, authors and series from old library item
-   * 
-   * @param {oldLibraryItem} oldLibraryItem 
-   * @returns {Promise<boolean>} true if updates were made
-   */
-  static async fullUpdateFromOld(oldLibraryItem) {
-    const libraryItemExpanded = await this.findByPk(oldLibraryItem.id, {
       include: [
         {
           model: this.sequelize.models.book,
@@ -253,186 +170,22 @@ class LibraryItem extends Model {
         },
         {
           model: this.sequelize.models.podcast,
-          include: [
-            {
-              model: this.sequelize.models.podcastEpisode
-            }
-          ]
+          include: {
+            model: this.sequelize.models.podcastEpisode
+          }
         }
+      ],
+      order: [
+        // Ensure author & series stay in the same order
+        [this.sequelize.models.book, this.sequelize.models.author, this.sequelize.models.bookAuthor, 'createdAt', 'ASC'],
+        [this.sequelize.models.book, this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
       ]
-    })
-    if (!libraryItemExpanded) return false
-
-    let hasUpdates = false
-
-    // Check update Book/Podcast
-    if (libraryItemExpanded.media) {
-      let updatedMedia = null
-      if (libraryItemExpanded.mediaType === 'podcast') {
-        updatedMedia = this.sequelize.models.podcast.getFromOld(oldLibraryItem.media)
-
-        const existingPodcastEpisodes = libraryItemExpanded.media.podcastEpisodes || []
-        const updatedPodcastEpisodes = oldLibraryItem.media.episodes || []
-
-        for (const existingPodcastEpisode of existingPodcastEpisodes) {
-          // Episode was removed
-          if (!updatedPodcastEpisodes.some(ep => ep.id === existingPodcastEpisode.id)) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" episode "${existingPodcastEpisode.title}" was removed`)
-            await existingPodcastEpisode.destroy()
-            hasUpdates = true
-          }
-        }
-        for (const updatedPodcastEpisode of updatedPodcastEpisodes) {
-          const existingEpisodeMatch = existingPodcastEpisodes.find(ep => ep.id === updatedPodcastEpisode.id)
-          if (!existingEpisodeMatch) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" episode "${updatedPodcastEpisode.title}" was added`)
-            await this.sequelize.models.podcastEpisode.createFromOld(updatedPodcastEpisode)
-            hasUpdates = true
-          } else {
-            const updatedEpisodeCleaned = this.sequelize.models.podcastEpisode.getFromOld(updatedPodcastEpisode)
-            let episodeHasUpdates = false
-            for (const key in updatedEpisodeCleaned) {
-              let existingValue = existingEpisodeMatch[key]
-              if (existingValue instanceof Date) existingValue = existingValue.valueOf()
-
-              if (!areEquivalent(updatedEpisodeCleaned[key], existingValue, true)) {
-                Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" episode "${existingEpisodeMatch.title}" ${key} was updated from "${existingValue}" to "${updatedEpisodeCleaned[key]}"`)
-                episodeHasUpdates = true
-              }
-            }
-            if (episodeHasUpdates) {
-              await existingEpisodeMatch.update(updatedEpisodeCleaned)
-              hasUpdates = true
-            }
-          }
-        }
-      } else if (libraryItemExpanded.mediaType === 'book') {
-        updatedMedia = this.sequelize.models.book.getFromOld(oldLibraryItem.media)
-
-        const existingAuthors = libraryItemExpanded.media.authors || []
-        const existingSeriesAll = libraryItemExpanded.media.series || []
-        const updatedAuthors = oldLibraryItem.media.metadata.authors || []
-        const uniqueUpdatedAuthors = updatedAuthors.filter((au, idx) => updatedAuthors.findIndex(a => a.id === au.id) === idx)
-        const updatedSeriesAll = oldLibraryItem.media.metadata.series || []
-
-        for (const existingAuthor of existingAuthors) {
-          // Author was removed from Book
-          if (!uniqueUpdatedAuthors.some(au => au.id === existingAuthor.id)) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" author "${existingAuthor.name}" was removed`)
-            await this.sequelize.models.bookAuthor.removeByIds(existingAuthor.id, libraryItemExpanded.media.id)
-            hasUpdates = true
-          }
-        }
-        for (const updatedAuthor of uniqueUpdatedAuthors) {
-          // Author was added
-          if (!existingAuthors.some(au => au.id === updatedAuthor.id)) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" author "${updatedAuthor.name}" was added`)
-            await this.sequelize.models.bookAuthor.create({ authorId: updatedAuthor.id, bookId: libraryItemExpanded.media.id })
-            hasUpdates = true
-          }
-        }
-        for (const existingSeries of existingSeriesAll) {
-          // Series was removed
-          if (!updatedSeriesAll.some(se => se.id === existingSeries.id)) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" series "${existingSeries.name}" was removed`)
-            await this.sequelize.models.bookSeries.removeByIds(existingSeries.id, libraryItemExpanded.media.id)
-            hasUpdates = true
-          }
-        }
-        for (const updatedSeries of updatedSeriesAll) {
-          // Series was added/updated
-          const existingSeriesMatch = existingSeriesAll.find(se => se.id === updatedSeries.id)
-          if (!existingSeriesMatch) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" series "${updatedSeries.name}" was added`)
-            await this.sequelize.models.bookSeries.create({ seriesId: updatedSeries.id, bookId: libraryItemExpanded.media.id, sequence: updatedSeries.sequence })
-            hasUpdates = true
-          } else if (existingSeriesMatch.bookSeries.sequence !== updatedSeries.sequence) {
-            Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" series "${updatedSeries.name}" sequence was updated from "${existingSeriesMatch.bookSeries.sequence}" to "${updatedSeries.sequence}"`)
-            await existingSeriesMatch.bookSeries.update({ id: updatedSeries.id, sequence: updatedSeries.sequence })
-            hasUpdates = true
-          }
-        }
-      }
-
-      let hasMediaUpdates = false
-      for (const key in updatedMedia) {
-        let existingValue = libraryItemExpanded.media[key]
-        if (existingValue instanceof Date) existingValue = existingValue.valueOf()
-
-        if (!areEquivalent(updatedMedia[key], existingValue, true)) {
-          Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" ${libraryItemExpanded.mediaType}.${key} updated from ${existingValue} to ${updatedMedia[key]}`)
-          hasMediaUpdates = true
-        }
-      }
-      if (hasMediaUpdates && updatedMedia) {
-        await libraryItemExpanded.media.update(updatedMedia)
-        hasUpdates = true
-      }
-    }
-
-    const updatedLibraryItem = this.getFromOld(oldLibraryItem)
-    let hasLibraryItemUpdates = false
-    for (const key in updatedLibraryItem) {
-      let existingValue = libraryItemExpanded[key]
-      if (existingValue instanceof Date) existingValue = existingValue.valueOf()
-
-      if (!areEquivalent(updatedLibraryItem[key], existingValue, true)) {
-        Logger.debug(`[LibraryItem] "${libraryItemExpanded.media.title}" ${key} updated from ${existingValue} to ${updatedLibraryItem[key]}`)
-        hasLibraryItemUpdates = true
-        if (key === 'updatedAt') {
-          libraryItemExpanded.changed('updatedAt', true)
-        }
-      }
-    }
-    if (hasLibraryItemUpdates) {
-      await libraryItemExpanded.update(updatedLibraryItem)
-      Logger.info(`[LibraryItem] Library item "${libraryItemExpanded.id}" updated`)
-      hasUpdates = true
-    }
-    return hasUpdates
-  }
-
-  static getFromOld(oldLibraryItem) {
-    const extraData = {}
-    if (oldLibraryItem.oldLibraryItemId) {
-      extraData.oldLibraryItemId = oldLibraryItem.oldLibraryItemId
-    }
-    return {
-      id: oldLibraryItem.id,
-      ino: oldLibraryItem.ino,
-      path: oldLibraryItem.path,
-      relPath: oldLibraryItem.relPath,
-      mediaId: oldLibraryItem.media.id,
-      mediaType: oldLibraryItem.mediaType,
-      isFile: !!oldLibraryItem.isFile,
-      isMissing: !!oldLibraryItem.isMissing,
-      isInvalid: !!oldLibraryItem.isInvalid,
-      mtime: oldLibraryItem.mtimeMs,
-      ctime: oldLibraryItem.ctimeMs,
-      updatedAt: oldLibraryItem.updatedAt,
-      birthtime: oldLibraryItem.birthtimeMs,
-      size: oldLibraryItem.size,
-      lastScan: oldLibraryItem.lastScan,
-      lastScanVersion: oldLibraryItem.scanVersion,
-      libraryId: oldLibraryItem.libraryId,
-      libraryFolderId: oldLibraryItem.folderId,
-      libraryFiles: oldLibraryItem.libraryFiles?.map(lf => lf.toJSON()) || [],
-      extraData
-    }
-  }
-
-  static removeById(libraryItemId) {
-    return this.destroy({
-      where: {
-        id: libraryItemId
-      },
-      individualHooks: true
     })
   }
 
   /**
-   * 
-   * @param {string} libraryItemId 
+   *
+   * @param {string} libraryItemId
    * @returns {Promise<LibraryItemExpanded>}
    */
   static async getExpandedById(libraryItemId) {
@@ -464,7 +217,7 @@ class LibraryItem extends Model {
           {
             model: this.sequelize.models.series,
             through: {
-              attributes: ['sequence']
+              attributes: ['id', 'sequence']
             }
           }
         ],
@@ -480,16 +233,19 @@ class LibraryItem extends Model {
   }
 
   /**
-   * Get old library item by id
-   * @param {string} libraryItemId 
-   * @returns {oldLibraryItem}
+   *
+   * @param {import('sequelize').WhereOptions} where
+   * @param {import('sequelize').BindOrReplacements} [replacements]
+   * @param {import('sequelize').IncludeOptions} [include]
+   * @returns {Promise<LibraryItemExpanded>}
    */
-  static async getOldById(libraryItemId) {
-    if (!libraryItemId) return null
-
-    const libraryItem = await this.findByPk(libraryItemId)
+  static async findOneExpanded(where, replacements = null, include = null) {
+    const libraryItem = await this.findOne({
+      where,
+      replacements,
+      include
+    })
     if (!libraryItem) {
-      Logger.error(`[LibraryItem] Library item not found with id "${libraryItemId}"`)
       return null
     }
 
@@ -513,7 +269,7 @@ class LibraryItem extends Model {
           {
             model: this.sequelize.models.series,
             through: {
-              attributes: ['sequence']
+              attributes: ['id', 'sequence']
             }
           }
         ],
@@ -525,24 +281,24 @@ class LibraryItem extends Model {
     }
 
     if (!libraryItem.media) return null
-    return this.getOldLibraryItem(libraryItem)
+    return libraryItem
   }
 
   /**
    * Get library items using filter and sort
-   * @param {oldLibrary} library 
-   * @param {oldUser} user 
-   * @param {object} options 
-   * @returns {object} { libraryItems:oldLibraryItem[], count:number }
+   * @param {import('./Library')} library
+   * @param {import('./User')} user
+   * @param {object} options
+   * @returns {{ libraryItems:Object[], count:number }}
    */
   static async getByFilterAndSort(library, user, options) {
     let start = Date.now()
-    const { libraryItems, count } = await libraryFilters.getFilteredLibraryItems(library, user, options)
+    const { libraryItems, count } = await libraryFilters.getFilteredLibraryItems(library.id, user, options)
     Logger.debug(`Loaded ${libraryItems.length} of ${count} items for libary page in ${((Date.now() - start) / 1000).toFixed(2)}s`)
 
     return {
-      libraryItems: libraryItems.map(li => {
-        const oldLibraryItem = this.getOldLibraryItem(li).toJSONMinified()
+      libraryItems: libraryItems.map((li) => {
+        const oldLibraryItem = li.toOldJSONMinified()
         if (li.collapsedSeries) {
           oldLibraryItem.collapsedSeries = li.collapsedSeries
         }
@@ -550,7 +306,7 @@ class LibraryItem extends Model {
           oldLibraryItem.media.metadata.series = li.series
         }
         if (li.rssFeed) {
-          oldLibraryItem.rssFeed = this.sequelize.models.feed.getOldFeed(li.rssFeed).toJSONMinified()
+          oldLibraryItem.rssFeed = li.rssFeed.toOldJSONMinified()
         }
         if (li.media.numEpisodes) {
           oldLibraryItem.media.numEpisodes = li.media.numEpisodes
@@ -561,6 +317,9 @@ class LibraryItem extends Model {
         if (li.numEpisodesIncomplete) {
           oldLibraryItem.numEpisodesIncomplete = li.numEpisodesIncomplete
         }
+        if (li.mediaItemShare) {
+          oldLibraryItem.mediaItemShare = li.mediaItemShare
+        }
 
         return oldLibraryItem
       }),
@@ -570,10 +329,10 @@ class LibraryItem extends Model {
 
   /**
    * Get home page data personalized shelves
-   * @param {oldLibrary} library 
-   * @param {oldUser} user 
-   * @param {string[]} include 
-   * @param {number} limit 
+   * @param {import('./Library')} library
+   * @param {import('./User')} user
+   * @param {string[]} include
+   * @param {number} limit
    * @returns {object[]} array of shelf objects
    */
   static async getPersonalizedShelves(library, user, include, limit) {
@@ -581,20 +340,31 @@ class LibraryItem extends Model {
 
     const shelves = []
 
+    const timed = async (loader) => {
+      const start = Date.now()
+      const payload = await loader()
+      return {
+        payload,
+        elapsedSeconds: ((Date.now() - start) / 1000).toFixed(2)
+      }
+    }
+
     // "Continue Listening" shelf
     const itemsInProgressPayload = await libraryFilters.getMediaItemsInProgress(library, user, include, limit, false)
     if (itemsInProgressPayload.items.length) {
-      const ebookOnlyItemsInProgress = itemsInProgressPayload.items.filter(li => li.media.isEBookOnly)
-      const audioOnlyItemsInProgress = itemsInProgressPayload.items.filter(li => !li.media.isEBookOnly)
+      const ebookOnlyItemsInProgress = itemsInProgressPayload.items.filter((li) => li.media.ebookFormat && !li.media.numTracks)
+      const audioItemsInProgress = itemsInProgressPayload.items.filter((li) => li.media.numTracks || li.mediaType === 'podcast')
 
-      shelves.push({
-        id: 'continue-listening',
-        label: 'Continue Listening',
-        labelStringKey: 'LabelContinueListening',
-        type: library.isPodcast ? 'episode' : 'book',
-        entities: audioOnlyItemsInProgress,
-        total: itemsInProgressPayload.count
-      })
+      if (audioItemsInProgress.length) {
+        shelves.push({
+          id: 'continue-listening',
+          label: 'Continue Listening',
+          labelStringKey: 'LabelContinueListening',
+          type: library.isPodcast ? 'episode' : 'book',
+          entities: audioItemsInProgress,
+          total: itemsInProgressPayload.count
+        })
+      }
 
       if (ebookOnlyItemsInProgress.length) {
         // "Continue Reading" shelf
@@ -610,11 +380,18 @@ class LibraryItem extends Model {
     }
     Logger.debug(`Loaded ${itemsInProgressPayload.items.length} of ${itemsInProgressPayload.count} items for "Continue Listening/Reading" in ${((Date.now() - fullStart) / 1000).toFixed(2)}s`)
 
-    let start = Date.now()
     if (library.isBook) {
-      start = Date.now()
+      const [continueSeriesResult, mostRecentResult, seriesMostRecentResult, discoverResult, mediaFinishedResult, newestAuthorsResult] = await Promise.all([
+        timed(() => libraryFilters.getLibraryItemsContinueSeries(library, user, include, limit)),
+        timed(() => libraryFilters.getLibraryItemsMostRecentlyAdded(library, user, include, limit)),
+        timed(() => libraryFilters.getSeriesMostRecentlyAdded(library, user, include, 5)),
+        timed(() => libraryFilters.getLibraryItemsToDiscover(library, user, include, limit)),
+        timed(() => libraryFilters.getMediaFinished(library, user, include, limit)),
+        timed(() => libraryFilters.getNewestAuthors(library, user, limit))
+      ])
+
+      const continueSeriesPayload = continueSeriesResult.payload
       // "Continue Series" shelf
-      const continueSeriesPayload = await libraryFilters.getLibraryItemsContinueSeries(library, user, include, limit)
       if (continueSeriesPayload.libraryItems.length) {
         shelves.push({
           id: 'continue-series',
@@ -625,42 +402,24 @@ class LibraryItem extends Model {
           total: continueSeriesPayload.count
         })
       }
-      Logger.debug(`Loaded ${continueSeriesPayload.libraryItems.length} of ${continueSeriesPayload.count} items for "Continue Series" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
-    } else if (library.isPodcast) {
-      // "Newest Episodes" shelf
-      const newestEpisodesPayload = await libraryFilters.getNewestPodcastEpisodes(library, user, limit)
-      if (newestEpisodesPayload.libraryItems.length) {
+      Logger.debug(`Loaded ${continueSeriesPayload.libraryItems.length} of ${continueSeriesPayload.count} items for "Continue Series" in ${continueSeriesResult.elapsedSeconds}s`)
+
+      const mostRecentPayload = mostRecentResult.payload
+      // "Recently Added" shelf
+      if (mostRecentPayload.libraryItems.length) {
         shelves.push({
-          id: 'newest-episodes',
-          label: 'Newest Episodes',
-          labelStringKey: 'LabelNewestEpisodes',
-          type: 'episode',
-          entities: newestEpisodesPayload.libraryItems,
-          total: newestEpisodesPayload.count
+          id: 'recently-added',
+          label: 'Recently Added',
+          labelStringKey: 'LabelRecentlyAdded',
+          type: library.mediaType,
+          entities: mostRecentPayload.libraryItems,
+          total: mostRecentPayload.count
         })
       }
-      Logger.debug(`Loaded ${newestEpisodesPayload.libraryItems.length} of ${newestEpisodesPayload.count} episodes for "Newest Episodes" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
-    }
+      Logger.debug(`Loaded ${mostRecentPayload.libraryItems.length} of ${mostRecentPayload.count} items for "Recently Added" in ${mostRecentResult.elapsedSeconds}s`)
 
-    start = Date.now()
-    // "Recently Added" shelf
-    const mostRecentPayload = await libraryFilters.getLibraryItemsMostRecentlyAdded(library, user, include, limit)
-    if (mostRecentPayload.libraryItems.length) {
-      shelves.push({
-        id: 'recently-added',
-        label: 'Recently Added',
-        labelStringKey: 'LabelRecentlyAdded',
-        type: library.mediaType,
-        entities: mostRecentPayload.libraryItems,
-        total: mostRecentPayload.count
-      })
-    }
-    Logger.debug(`Loaded ${mostRecentPayload.libraryItems.length} of ${mostRecentPayload.count} items for "Recently Added" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
-
-    if (library.isBook) {
-      start = Date.now()
+      const seriesMostRecentPayload = seriesMostRecentResult.payload
       // "Recent Series" shelf
-      const seriesMostRecentPayload = await libraryFilters.getSeriesMostRecentlyAdded(library, user, include, 5)
       if (seriesMostRecentPayload.series.length) {
         shelves.push({
           id: 'recent-series',
@@ -671,11 +430,10 @@ class LibraryItem extends Model {
           total: seriesMostRecentPayload.count
         })
       }
-      Logger.debug(`Loaded ${seriesMostRecentPayload.series.length} of ${seriesMostRecentPayload.count} series for "Recent Series" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
+      Logger.debug(`Loaded ${seriesMostRecentPayload.series.length} of ${seriesMostRecentPayload.count} series for "Recent Series" in ${seriesMostRecentResult.elapsedSeconds}s`)
 
-      start = Date.now()
+      const discoverLibraryItemsPayload = discoverResult.payload
       // "Discover" shelf
-      const discoverLibraryItemsPayload = await libraryFilters.getLibraryItemsToDiscover(library, user, include, limit)
       if (discoverLibraryItemsPayload.libraryItems.length) {
         shelves.push({
           id: 'discover',
@@ -686,43 +444,41 @@ class LibraryItem extends Model {
           total: discoverLibraryItemsPayload.count
         })
       }
-      Logger.debug(`Loaded ${discoverLibraryItemsPayload.libraryItems.length} of ${discoverLibraryItemsPayload.count} items for "Discover" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
-    }
+      Logger.debug(`Loaded ${discoverLibraryItemsPayload.libraryItems.length} of ${discoverLibraryItemsPayload.count} items for "Discover" in ${discoverResult.elapsedSeconds}s`)
 
-    start = Date.now()
-    // "Listen Again" shelf
-    const mediaFinishedPayload = await libraryFilters.getMediaFinished(library, user, include, limit)
-    if (mediaFinishedPayload.items.length) {
-      const ebookOnlyItemsInProgress = mediaFinishedPayload.items.filter(li => li.media.isEBookOnly)
-      const audioOnlyItemsInProgress = mediaFinishedPayload.items.filter(li => !li.media.isEBookOnly)
+      const mediaFinishedPayload = mediaFinishedResult.payload
+      // "Listen Again" shelf
+      if (mediaFinishedPayload.items.length) {
+        const ebookOnlyItemsInProgress = mediaFinishedPayload.items.filter((li) => li.media.ebookFormat && !li.media.numTracks)
+        const audioItemsInProgress = mediaFinishedPayload.items.filter((li) => li.media.numTracks || li.mediaType === 'podcast')
 
-      shelves.push({
-        id: 'listen-again',
-        label: 'Listen Again',
-        labelStringKey: 'LabelListenAgain',
-        type: library.isPodcast ? 'episode' : 'book',
-        entities: audioOnlyItemsInProgress,
-        total: mediaFinishedPayload.count
-      })
+        if (audioItemsInProgress.length) {
+          shelves.push({
+            id: 'listen-again',
+            label: 'Listen Again',
+            labelStringKey: 'LabelListenAgain',
+            type: library.isPodcast ? 'episode' : 'book',
+            entities: audioItemsInProgress,
+            total: mediaFinishedPayload.count
+          })
+        }
 
-      // "Read Again" shelf
-      if (ebookOnlyItemsInProgress.length) {
-        shelves.push({
-          id: 'read-again',
-          label: 'Read Again',
-          labelStringKey: 'LabelReadAgain',
-          type: 'book',
-          entities: ebookOnlyItemsInProgress,
-          total: mediaFinishedPayload.count
-        })
+        if (ebookOnlyItemsInProgress.length) {
+          // "Read Again" shelf
+          shelves.push({
+            id: 'read-again',
+            label: 'Read Again',
+            labelStringKey: 'LabelReadAgain',
+            type: 'book',
+            entities: ebookOnlyItemsInProgress,
+            total: mediaFinishedPayload.count
+          })
+        }
       }
-    }
-    Logger.debug(`Loaded ${mediaFinishedPayload.items.length} of ${mediaFinishedPayload.count} items for "Listen/Read Again" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
+      Logger.debug(`Loaded ${mediaFinishedPayload.items.length} of ${mediaFinishedPayload.count} items for "Listen/Read Again" in ${mediaFinishedResult.elapsedSeconds}s`)
 
-    if (library.isBook) {
-      start = Date.now()
+      const newestAuthorsPayload = newestAuthorsResult.payload
       // "Newest Authors" shelf
-      const newestAuthorsPayload = await libraryFilters.getNewestAuthors(library, user, limit)
       if (newestAuthorsPayload.authors.length) {
         shelves.push({
           id: 'newest-authors',
@@ -733,7 +489,68 @@ class LibraryItem extends Model {
           total: newestAuthorsPayload.count
         })
       }
-      Logger.debug(`Loaded ${newestAuthorsPayload.authors.length} of ${newestAuthorsPayload.count} authors for "Newest Authors" in ${((Date.now() - start) / 1000).toFixed(2)}s`)
+      Logger.debug(`Loaded ${newestAuthorsPayload.authors.length} of ${newestAuthorsPayload.count} authors for "Newest Authors" in ${newestAuthorsResult.elapsedSeconds}s`)
+    } else if (library.isPodcast) {
+      const [newestEpisodesResult, mostRecentResult, mediaFinishedResult] = await Promise.all([timed(() => libraryFilters.getNewestPodcastEpisodes(library, user, limit)), timed(() => libraryFilters.getLibraryItemsMostRecentlyAdded(library, user, include, limit)), timed(() => libraryFilters.getMediaFinished(library, user, include, limit))])
+
+      const newestEpisodesPayload = newestEpisodesResult.payload
+      // "Newest Episodes" shelf
+      if (newestEpisodesPayload.libraryItems.length) {
+        shelves.push({
+          id: 'newest-episodes',
+          label: 'Newest Episodes',
+          labelStringKey: 'LabelNewestEpisodes',
+          type: 'episode',
+          entities: newestEpisodesPayload.libraryItems,
+          total: newestEpisodesPayload.count
+        })
+      }
+      Logger.debug(`Loaded ${newestEpisodesPayload.libraryItems.length} of ${newestEpisodesPayload.count} episodes for "Newest Episodes" in ${newestEpisodesResult.elapsedSeconds}s`)
+
+      const mostRecentPayload = mostRecentResult.payload
+      // "Recently Added" shelf
+      if (mostRecentPayload.libraryItems.length) {
+        shelves.push({
+          id: 'recently-added',
+          label: 'Recently Added',
+          labelStringKey: 'LabelRecentlyAdded',
+          type: library.mediaType,
+          entities: mostRecentPayload.libraryItems,
+          total: mostRecentPayload.count
+        })
+      }
+      Logger.debug(`Loaded ${mostRecentPayload.libraryItems.length} of ${mostRecentPayload.count} items for "Recently Added" in ${mostRecentResult.elapsedSeconds}s`)
+
+      const mediaFinishedPayload = mediaFinishedResult.payload
+      // "Listen Again" shelf
+      if (mediaFinishedPayload.items.length) {
+        const ebookOnlyItemsInProgress = mediaFinishedPayload.items.filter((li) => li.media.ebookFormat && !li.media.numTracks)
+        const audioItemsInProgress = mediaFinishedPayload.items.filter((li) => li.media.numTracks || li.mediaType === 'podcast')
+
+        if (audioItemsInProgress.length) {
+          shelves.push({
+            id: 'listen-again',
+            label: 'Listen Again',
+            labelStringKey: 'LabelListenAgain',
+            type: 'episode',
+            entities: audioItemsInProgress,
+            total: mediaFinishedPayload.count
+          })
+        }
+
+        if (ebookOnlyItemsInProgress.length) {
+          // "Read Again" shelf
+          shelves.push({
+            id: 'read-again',
+            label: 'Read Again',
+            labelStringKey: 'LabelReadAgain',
+            type: 'book',
+            entities: ebookOnlyItemsInProgress,
+            total: mediaFinishedPayload.count
+          })
+        }
+      }
+      Logger.debug(`Loaded ${mediaFinishedPayload.items.length} of ${mediaFinishedPayload.count} items for "Listen/Read Again" in ${mediaFinishedResult.elapsedSeconds}s`)
     }
 
     Logger.debug(`Loaded ${shelves.length} personalized shelves in ${((Date.now() - fullStart) / 1000).toFixed(2)}s`)
@@ -743,28 +560,18 @@ class LibraryItem extends Model {
 
   /**
    * Get book library items for author, optional use user permissions
-   * @param {oldAuthor} author
-   * @param {[oldUser]} user 
-   * @returns {Promise<oldLibraryItem[]>}
+   * @param {import('./Author')} author
+   * @param {import('./User')} user
+   * @returns {Promise<LibraryItemExpanded[]>}
    */
   static async getForAuthor(author, user = null) {
     const { libraryItems } = await libraryFilters.getLibraryItemsForAuthor(author, user, undefined, undefined)
-    return libraryItems.map(li => this.getOldLibraryItem(li))
-  }
-
-  /**
-   * Get book library items in a collection
-   * @param {oldCollection} collection 
-   * @returns {Promise<oldLibraryItem[]>}
-   */
-  static async getForCollection(collection) {
-    const libraryItems = await libraryFilters.getLibraryItemsForCollection(collection)
-    return libraryItems.map(li => this.getOldLibraryItem(li))
+    return libraryItems
   }
 
   /**
    * Check if library item exists
-   * @param {string} libraryItemId 
+   * @param {string} libraryItemId
    * @returns {Promise<boolean>}
    */
   static async checkExistsById(libraryItemId) {
@@ -772,113 +579,214 @@ class LibraryItem extends Model {
   }
 
   /**
-   * 
-   * @param {import('sequelize').WhereOptions} where 
-   * @param {import('sequelize').BindOrReplacements} replacements
-   * @returns {Object} oldLibraryItem
+   *
+   * @param {string} libraryItemId
+   * @returns {Promise<string>}
    */
-  static async findOneOld(where, replacements = {}) {
-    const libraryItem = await this.findOne({
-      where,
-      replacements,
+  static async getCoverPath(libraryItemId) {
+    const libraryItem = await this.findByPk(libraryItemId, {
+      attributes: ['id', 'mediaType', 'mediaId', 'libraryId'],
       include: [
         {
           model: this.sequelize.models.book,
-          include: [
-            {
-              model: this.sequelize.models.author,
-              through: {
-                attributes: []
-              }
-            },
-            {
-              model: this.sequelize.models.series,
-              through: {
-                attributes: ['sequence']
-              }
-            }
-          ]
+          attributes: ['id', 'coverPath']
         },
         {
           model: this.sequelize.models.podcast,
-          include: [
-            {
-              model: this.sequelize.models.podcastEpisode
-            }
-          ]
+          attributes: ['id', 'coverPath']
         }
-      ],
-      order: [
-        [this.sequelize.models.book, this.sequelize.models.author, this.sequelize.models.bookAuthor, 'createdAt', 'ASC'],
-        [this.sequelize.models.book, this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
       ]
     })
-    if (!libraryItem) return null
-    return this.getOldLibraryItem(libraryItem)
+    if (!libraryItem) {
+      Logger.warn(`[LibraryItem] getCoverPath: Library item "${libraryItemId}" does not exist`)
+      return null
+    }
+
+    return libraryItem.media.coverPath
   }
 
   /**
-   * 
-   * @param {import('sequelize').FindOptions} options 
-   * @returns {Promise<Book|Podcast>}
+   *
+   * @returns {Promise}
    */
-  getMedia(options) {
-    if (!this.mediaType) return Promise.resolve(null)
-    const mixinMethodName = `get${this.sequelize.uppercaseFirst(this.mediaType)}`
-    return this[mixinMethodName](options)
+  async saveMetadataFile() {
+    let metadataPath = Path.join(global.MetadataPath, 'items', this.id)
+    let storeMetadataWithItem = global.ServerSettings.storeMetadataWithItem
+    if (storeMetadataWithItem && !this.isFile) {
+      metadataPath = this.path
+    } else {
+      // Make sure metadata book dir exists
+      storeMetadataWithItem = false
+      await fsExtra.ensureDir(metadataPath)
+    }
+
+    const metadataFilePath = Path.join(metadataPath, `metadata.${global.ServerSettings.metadataFileFormat}`)
+
+    // Expanded with series, authors, podcastEpisodes
+    const mediaExpanded = this.media || (await this.getMediaExpanded())
+
+    let jsonObject = {}
+    if (this.mediaType === 'book') {
+      jsonObject = {
+        tags: mediaExpanded.tags || [],
+        chapters: mediaExpanded.chapters?.map((c) => ({ ...c })) || [],
+        title: mediaExpanded.title,
+        subtitle: mediaExpanded.subtitle,
+        authors: mediaExpanded.authors.map((a) => a.name),
+        narrators: mediaExpanded.narrators,
+        series: mediaExpanded.series.map((se) => {
+          const sequence = se.bookSeries?.sequence || ''
+          if (!sequence) return se.name
+          return `${se.name} #${sequence}`
+        }),
+        genres: mediaExpanded.genres || [],
+        publishedYear: mediaExpanded.publishedYear,
+        publishedDate: mediaExpanded.publishedDate,
+        publisher: mediaExpanded.publisher,
+        description: mediaExpanded.description,
+        isbn: mediaExpanded.isbn,
+        asin: mediaExpanded.asin,
+        language: mediaExpanded.language,
+        explicit: !!mediaExpanded.explicit,
+        abridged: !!mediaExpanded.abridged
+      }
+    } else {
+      jsonObject = {
+        tags: mediaExpanded.tags || [],
+        title: mediaExpanded.title,
+        author: mediaExpanded.author,
+        description: mediaExpanded.description,
+        releaseDate: mediaExpanded.releaseDate,
+        genres: mediaExpanded.genres || [],
+        feedURL: mediaExpanded.feedURL,
+        imageURL: mediaExpanded.imageURL,
+        itunesPageURL: mediaExpanded.itunesPageURL,
+        itunesId: mediaExpanded.itunesId,
+        itunesArtistId: mediaExpanded.itunesArtistId,
+        asin: mediaExpanded.asin,
+        language: mediaExpanded.language,
+        explicit: !!mediaExpanded.explicit,
+        podcastType: mediaExpanded.podcastType
+      }
+    }
+
+    return fsExtra
+      .writeFile(metadataFilePath, JSON.stringify(jsonObject, null, 2))
+      .then(async () => {
+        // Add metadata.json to libraryFiles array if it is new
+        let metadataLibraryFile = this.libraryFiles.find((lf) => lf.metadata.path === filePathToPOSIX(metadataFilePath))
+        if (storeMetadataWithItem) {
+          if (!metadataLibraryFile) {
+            const newLibraryFile = new LibraryFile()
+            await newLibraryFile.setDataFromPath(metadataFilePath, `metadata.json`)
+            metadataLibraryFile = newLibraryFile.toJSON()
+            this.libraryFiles.push(metadataLibraryFile)
+          } else {
+            const fileTimestamps = await getFileTimestampsWithIno(metadataFilePath)
+            if (fileTimestamps) {
+              metadataLibraryFile.metadata.mtimeMs = fileTimestamps.mtimeMs
+              metadataLibraryFile.metadata.ctimeMs = fileTimestamps.ctimeMs
+              metadataLibraryFile.metadata.size = fileTimestamps.size
+              metadataLibraryFile.ino = fileTimestamps.ino
+            }
+          }
+          const libraryItemDirTimestamps = await getFileTimestampsWithIno(this.path)
+          if (libraryItemDirTimestamps) {
+            this.mtime = libraryItemDirTimestamps.mtimeMs
+            this.ctime = libraryItemDirTimestamps.ctimeMs
+            let size = 0
+            this.libraryFiles.forEach((lf) => (size += !isNaN(lf.metadata.size) ? Number(lf.metadata.size) : 0))
+            this.size = size
+            await this.save()
+          }
+        }
+
+        Logger.debug(`[LibraryItem] Saved metadata for "${this.media.title}" file to "${metadataFilePath}"`)
+
+        return metadataLibraryFile
+      })
+      .catch((error) => {
+        Logger.error(`Failed to save json file at "${metadataFilePath}"`, error)
+        return null
+      })
   }
 
   /**
    * Initialize model
-   * @param {import('../Database').sequelize} sequelize 
+   * @param {import('../Database').sequelize} sequelize
    */
   static init(sequelize) {
-    super.init({
-      id: {
-        type: DataTypes.UUID,
-        defaultValue: DataTypes.UUIDV4,
-        primaryKey: true
+    super.init(
+      {
+        id: {
+          type: DataTypes.UUID,
+          defaultValue: DataTypes.UUIDV4,
+          primaryKey: true
+        },
+        ino: DataTypes.STRING,
+        path: DataTypes.STRING,
+        relPath: DataTypes.STRING,
+        mediaId: DataTypes.UUID,
+        mediaType: DataTypes.STRING,
+        isFile: DataTypes.BOOLEAN,
+        isMissing: DataTypes.BOOLEAN,
+        isInvalid: DataTypes.BOOLEAN,
+        mtime: DataTypes.DATE(6),
+        ctime: DataTypes.DATE(6),
+        birthtime: DataTypes.DATE(6),
+        size: DataTypes.BIGINT,
+        lastScan: DataTypes.DATE,
+        lastScanVersion: DataTypes.STRING,
+        libraryFiles: DataTypes.JSON,
+        extraData: DataTypes.JSON,
+        title: DataTypes.STRING,
+        titleIgnorePrefix: DataTypes.STRING,
+        authorNamesFirstLast: DataTypes.STRING,
+        authorNamesLastFirst: DataTypes.STRING
       },
-      ino: DataTypes.STRING,
-      path: DataTypes.STRING,
-      relPath: DataTypes.STRING,
-      mediaId: DataTypes.UUIDV4,
-      mediaType: DataTypes.STRING,
-      isFile: DataTypes.BOOLEAN,
-      isMissing: DataTypes.BOOLEAN,
-      isInvalid: DataTypes.BOOLEAN,
-      mtime: DataTypes.DATE(6),
-      ctime: DataTypes.DATE(6),
-      birthtime: DataTypes.DATE(6),
-      size: DataTypes.BIGINT,
-      lastScan: DataTypes.DATE,
-      lastScanVersion: DataTypes.STRING,
-      libraryFiles: DataTypes.JSON,
-      extraData: DataTypes.JSON
-    }, {
-      sequelize,
-      modelName: 'libraryItem',
-      indexes: [
-        {
-          fields: ['createdAt']
-        },
-        {
-          fields: ['mediaId']
-        },
-        {
-          fields: ['libraryId', 'mediaType']
-        },
-        {
-          fields: ['libraryId', 'mediaId', 'mediaType']
-        },
-        {
-          fields: ['birthtime']
-        },
-        {
-          fields: ['mtime']
-        }
-      ]
-    })
+      {
+        sequelize,
+        modelName: 'libraryItem',
+        indexes: [
+          {
+            fields: ['createdAt']
+          },
+          {
+            fields: ['mediaId']
+          },
+          {
+            fields: ['libraryId', 'mediaType']
+          },
+          {
+            fields: ['libraryId', 'mediaType', 'size']
+          },
+          {
+            fields: ['libraryId', 'mediaType', 'createdAt']
+          },
+          {
+            fields: ['libraryId', 'mediaType', { name: 'title', collate: 'NOCASE' }]
+          },
+          {
+            fields: ['libraryId', 'mediaType', { name: 'titleIgnorePrefix', collate: 'NOCASE' }]
+          },
+          {
+            fields: ['libraryId', 'mediaType', { name: 'authorNamesFirstLast', collate: 'NOCASE' }]
+          },
+          {
+            fields: ['libraryId', 'mediaType', { name: 'authorNamesLastFirst', collate: 'NOCASE' }]
+          },
+          {
+            fields: ['libraryId', 'mediaId', 'mediaType']
+          },
+          {
+            fields: ['birthtime']
+          },
+          {
+            fields: ['mtime']
+          }
+        ]
+      }
+    )
 
     const { library, libraryFolder, book, podcast } = sequelize.models
     library.hasMany(LibraryItem)
@@ -905,7 +813,7 @@ class LibraryItem extends Model {
     })
     LibraryItem.belongsTo(podcast, { foreignKey: 'mediaId', constraints: false })
 
-    LibraryItem.addHook('afterFind', findResult => {
+    LibraryItem.addHook('afterFind', (findResult) => {
       if (!findResult) return
 
       if (!Array.isArray(findResult)) findResult = [findResult]
@@ -925,13 +833,211 @@ class LibraryItem extends Model {
       }
     })
 
-    LibraryItem.addHook('afterDestroy', async instance => {
+    LibraryItem.addHook('afterDestroy', async (instance) => {
       if (!instance) return
       const media = await instance.getMedia()
       if (media) {
         media.destroy()
       }
     })
+  }
+
+  get isBook() {
+    return this.mediaType === 'book'
+  }
+  get isPodcast() {
+    return this.mediaType === 'podcast'
+  }
+  /**
+   * Check if book or podcast library item has audio tracks.
+   * Requires expanded library item (media loaded).
+   *
+   * @returns {boolean}
+   */
+  get hasAudioTracks() {
+    if (!this.media) {
+      Logger.error(`[LibraryItem] hasAudioTracks: Library item "${this.id}" does not have media`)
+      return false
+    }
+    return this.media.hasAudioTracks
+  }
+
+  /**
+   *
+   * @param {import('sequelize').FindOptions} options
+   * @returns {Promise<Book|Podcast>}
+   */
+  getMedia(options) {
+    if (!this.mediaType) return Promise.resolve(null)
+    const mixinMethodName = `get${this.sequelize.uppercaseFirst(this.mediaType)}`
+    return this[mixinMethodName](options)
+  }
+
+  /**
+   *
+   * @returns {Promise<Book|Podcast>}
+   */
+  getMediaExpanded() {
+    if (this.mediaType === 'podcast') {
+      return this.getMedia({
+        include: [
+          {
+            model: this.sequelize.models.podcastEpisode
+          }
+        ]
+      })
+    } else {
+      return this.getMedia({
+        include: [
+          {
+            model: this.sequelize.models.author,
+            through: {
+              attributes: []
+            }
+          },
+          {
+            model: this.sequelize.models.series,
+            through: {
+              attributes: ['sequence']
+            }
+          }
+        ],
+        order: [
+          [this.sequelize.models.author, this.sequelize.models.bookAuthor, 'createdAt', 'ASC'],
+          [this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
+        ]
+      })
+    }
+  }
+
+  /**
+   *
+   * @param {string} ino
+   * @returns {import('./Book').AudioFileObject}
+   */
+  getAudioFileWithIno(ino) {
+    if (!this.media) {
+      Logger.error(`[LibraryItem] getAudioFileWithIno: Library item "${this.id}" does not have media`)
+      return null
+    }
+    if (this.isBook) {
+      return this.media.audioFiles.find((af) => af.ino === ino)
+    } else {
+      return this.media.podcastEpisodes.find((pe) => pe.audioFile?.ino === ino)?.audioFile
+    }
+  }
+
+  /**
+   * Get the track list to be used in client audio players
+   * AudioTrack is the AudioFile with startOffset and contentUrl
+   * Podcasts must have an episodeId to get the track list
+   *
+   * @param {string} [episodeId]
+   * @returns {import('./Book').AudioTrack[]}
+   */
+  getTrackList(episodeId) {
+    if (!this.media) {
+      Logger.error(`[LibraryItem] getTrackList: Library item "${this.id}" does not have media`)
+      return []
+    }
+    return this.media.getTracklist(this.id, episodeId)
+  }
+
+  /**
+   *
+   * @param {string} ino
+   * @returns {LibraryFile}
+   */
+  getLibraryFileWithIno(ino) {
+    const libraryFile = this.libraryFiles.find((lf) => lf.ino === ino)
+    if (!libraryFile) return null
+    return new LibraryFile(libraryFile)
+  }
+
+  getLibraryFiles() {
+    return this.libraryFiles.map((lf) => new LibraryFile(lf))
+  }
+
+  getLibraryFilesJson() {
+    return this.libraryFiles.map((lf) => new LibraryFile(lf).toJSON())
+  }
+
+  toOldJSON() {
+    if (!this.media) {
+      throw new Error(`[LibraryItem] Cannot convert to old JSON without media for library item "${this.id}"`)
+    }
+
+    return {
+      id: this.id,
+      ino: this.ino,
+      oldLibraryItemId: this.extraData?.oldLibraryItemId || null,
+      libraryId: this.libraryId,
+      folderId: this.libraryFolderId,
+      path: this.path,
+      relPath: this.relPath,
+      isFile: this.isFile,
+      mtimeMs: this.mtime?.valueOf(),
+      ctimeMs: this.ctime?.valueOf(),
+      birthtimeMs: this.birthtime?.valueOf(),
+      addedAt: this.createdAt.valueOf(),
+      updatedAt: this.updatedAt.valueOf(),
+      lastScan: this.lastScan?.valueOf(),
+      scanVersion: this.lastScanVersion,
+      isMissing: !!this.isMissing,
+      isInvalid: !!this.isInvalid,
+      mediaType: this.mediaType,
+      media: this.media.toOldJSON(this.id),
+      // LibraryFile JSON includes a fileType property that may not be saved in libraryFiles column in the database
+      libraryFiles: this.getLibraryFilesJson()
+    }
+  }
+
+  /**
+   * Minified library item JSON for list/shelf endpoints.
+   * `toOldJSONExpanded()` must be a strict superset: every key here must exist in expanded
+   * with the same value semantics. Only additive changes to expanded; never remove or rename keys.
+   */
+  toOldJSONMinified() {
+    if (!this.media) {
+      throw new Error(`[LibraryItem] Cannot convert to old JSON without media for library item "${this.id}"`)
+    }
+
+    return {
+      id: this.id,
+      ino: this.ino,
+      oldLibraryItemId: this.extraData?.oldLibraryItemId || null,
+      libraryId: this.libraryId,
+      folderId: this.libraryFolderId,
+      path: this.path,
+      relPath: this.relPath,
+      isFile: this.isFile,
+      mtimeMs: this.mtime?.valueOf(),
+      ctimeMs: this.ctime?.valueOf(),
+      birthtimeMs: this.birthtime?.valueOf(),
+      addedAt: this.createdAt.valueOf(),
+      updatedAt: this.updatedAt.valueOf(),
+      isMissing: !!this.isMissing,
+      isInvalid: !!this.isInvalid,
+      mediaType: this.mediaType,
+      media: this.media.toOldJSONMinified(),
+      numFiles: this.libraryFiles.length,
+      size: this.size
+    }
+  }
+
+  /**
+   * Expanded library item JSON for item detail and socket events.
+   * Must be a strict superset of `toOldJSONMinified()` — built by spreading minified, then adding expanded-only fields.
+   */
+  toOldJSONExpanded() {
+    return {
+      ...this.toOldJSONMinified(),
+      lastScan: this.lastScan?.valueOf(),
+      scanVersion: this.lastScanVersion,
+      media: this.media.toOldJSONExpanded(this.id),
+      // LibraryFile JSON includes a fileType property that may not be saved in libraryFiles column in the database
+      libraryFiles: this.getLibraryFilesJson()
+    }
   }
 }
 

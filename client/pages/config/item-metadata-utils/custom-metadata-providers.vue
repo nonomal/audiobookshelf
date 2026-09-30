@@ -2,19 +2,19 @@
   <div class="relative">
     <app-settings-content :header-text="$strings.HeaderCustomMetadataProviders">
       <template #header-prefix>
-        <nuxt-link to="/config/item-metadata-utils" class="w-8 h-8 flex items-center justify-center rounded-full cursor-pointer hover:bg-white hover:bg-opacity-10 text-center mr-2">
-          <span class="material-icons text-2xl">arrow_back</span>
+        <nuxt-link to="/config/item-metadata-utils" class="w-8 h-8 flex items-center justify-center rounded-full cursor-pointer hover:bg-white/10 text-center mr-2">
+          <span class="material-symbols text-2xl">arrow_back</span>
         </nuxt-link>
       </template>
       <template #header-items>
         <ui-tooltip :text="$strings.LabelClickForMoreInfo" class="inline-flex ml-2">
-          <a href="https://www.audiobookshelf.org/guides/custom-metadata-providers" target="_blank" class="inline-flex">
-            <span class="material-icons text-xl w-5 text-gray-200">help_outline</span>
+          <a href="https://audiobookshelf.org/docs/documentation/community/community-providers" target="_blank" class="inline-flex">
+            <span class="material-symbols text-xl w-5 text-gray-200">help_outline</span>
           </a>
         </ui-tooltip>
-        <div class="flex-grow" />
+        <div class="grow" />
 
-        <ui-btn color="primary" small @click="setShowAddModal">{{ $strings.ButtonAdd }}</ui-btn>
+        <ui-btn color="bg-primary" small @click="setShowAddModal">{{ $strings.ButtonAdd }}</ui-btn>
       </template>
 
       <tables-custom-metadata-provider-table :providers="providers" :processing.sync="processing" class="pt-2" @removed="providerRemoved" />
@@ -58,7 +58,7 @@ export default {
         })
         .catch((error) => {
           console.error('Failed', error)
-          this.$toast.error('Failed to load custom metadata providers')
+          this.$toast.error(this.$strings.ToastFailedToLoadData)
         })
         .finally(() => {
           this.processing = false

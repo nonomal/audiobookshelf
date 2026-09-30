@@ -8,10 +8,10 @@
     <div ref="container" class="w-full rounded-lg bg-bg box-shadow-md overflow-y-auto overflow-x-hidden p-6" style="max-height: 80vh">
       <div class="flex items-center">
         <p class="text-base text-gray-200">{{ _session.displayTitle }}</p>
-        <p v-if="_session.displayAuthor" class="text-xs text-gray-400 px-4">by {{ _session.displayAuthor }}</p>
+        <p v-if="_session.displayAuthor" class="text-xs text-gray-400 px-4">{{ $getString('LabelByAuthor', [_session.displayAuthor]) }}</p>
       </div>
 
-      <div class="w-full h-px bg-white bg-opacity-10 my-4" />
+      <div class="w-full h-px bg-white/10 my-4" />
 
       <div class="flex flex-wrap mb-4">
         <div class="w-full md:w-2/3">
@@ -80,26 +80,27 @@
           </div>
         </div>
         <div class="w-full md:w-1/3">
-          <p class="font-semibold uppercase text-xs text-gray-400 tracking-wide mb-2 mt-6 md:mt-0">{{ $strings.LabelUser }}</p>
-          <p class="mb-1 text-xs">{{ _session.userId }}</p>
+          <p v-if="!isMediaItemShareSession" class="font-semibold uppercase text-xs text-gray-400 tracking-wide mb-2 mt-6 md:mt-0">{{ $strings.LabelUser }}</p>
+          <p v-if="!isMediaItemShareSession" class="mb-1 text-xs">{{ username }}</p>
 
           <p class="font-semibold uppercase text-xs text-gray-400 tracking-wide mt-6 mb-2">{{ $strings.LabelMediaPlayer }}</p>
           <p class="mb-1">{{ playMethodName }}</p>
           <p class="mb-1">{{ _session.mediaPlayer }}</p>
 
           <p v-if="hasDeviceInfo" class="font-semibold uppercase text-xs text-gray-400 tracking-wide mt-6 mb-2">{{ $strings.LabelDevice }}</p>
+          <p v-if="clientDisplayName" class="mb-1">{{ clientDisplayName }}</p>
           <p v-if="deviceInfo.ipAddress" class="mb-1">{{ deviceInfo.ipAddress }}</p>
           <p v-if="osDisplayName" class="mb-1">{{ osDisplayName }}</p>
           <p v-if="deviceInfo.browserName" class="mb-1">{{ deviceInfo.browserName }}</p>
-          <p v-if="clientDisplayName" class="mb-1">{{ clientDisplayName }}</p>
+          <p v-if="deviceDisplayName" class="mb-1">{{ deviceDisplayName }}</p>
           <p v-if="deviceInfo.sdkVersion" class="mb-1">SDK {{ $strings.LabelVersion }}: {{ deviceInfo.sdkVersion }}</p>
           <p v-if="deviceInfo.deviceType" class="mb-1">{{ $strings.LabelType }}: {{ deviceInfo.deviceType }}</p>
         </div>
       </div>
 
       <div class="flex items-center">
-        <ui-btn v-if="!isOpenSession" small color="error" @click.stop="deleteSessionClick">{{ $strings.ButtonDelete }}</ui-btn>
-        <ui-btn v-else small color="error" @click.stop="closeSessionClick">Close Open Session</ui-btn>
+        <ui-btn v-if="!isOpenSession && !isMediaItemShareSession" small color="bg-error" @click.stop="deleteSessionClick">{{ $strings.ButtonDelete }}</ui-btn>
+        <ui-btn v-else-if="!isMediaItemShareSession" small color="bg-error" @click.stop="closeSessionClick">{{ $strings.ButtonCloseSession }}</ui-btn>
       </div>
     </div>
   </modals-modal>
@@ -131,6 +132,9 @@ export default {
     _session() {
       return this.session || {}
     },
+    username() {
+      return this._session.user?.username || this._session.userId || ''
+    },
     deviceInfo() {
       return this._session.deviceInfo || {}
     },
@@ -141,9 +145,13 @@ export default {
       if (!this.deviceInfo.osName) return null
       return `${this.deviceInfo.osName} ${this.deviceInfo.osVersion}`
     },
-    clientDisplayName() {
+    deviceDisplayName() {
       if (!this.deviceInfo.manufacturer || !this.deviceInfo.model) return null
       return `${this.deviceInfo.manufacturer} ${this.deviceInfo.model}`
+    },
+    clientDisplayName() {
+      if (!this.deviceInfo.clientName) return null
+      return `${this.deviceInfo.clientName} ${this.deviceInfo.clientVersion || ''}`
     },
     playMethodName() {
       const playMethod = this._session.playMethod
@@ -154,13 +162,16 @@ export default {
       return 'Unknown'
     },
     dateFormat() {
-      return this.$store.state.serverSettings.dateFormat
+      return this.$store.getters['getServerSetting']('dateFormat')
     },
     timeFormat() {
-      return this.$store.state.serverSettings.timeFormat
+      return this.$store.getters['getServerSetting']('timeFormat')
     },
     isOpenSession() {
       return !!this._session.open
+    },
+    isMediaItemShareSession() {
+      return this._session.mediaPlayer === 'web-share'
     }
   },
   methods: {
@@ -198,14 +209,13 @@ export default {
       this.$axios
         .$post(`/api/session/${this._session.id}/close`)
         .then(() => {
-          this.$toast.success('Session closed')
           this.show = false
           this.$emit('closedSession')
         })
         .catch((error) => {
           console.error('Failed to close session', error)
           const errMsg = error.response?.data || ''
-          this.$toast.error(errMsg || 'Failed to close open session')
+          this.$toast.error(errMsg || this.$strings.ToastSessionCloseFailed)
         })
         .finally(() => {
           this.processing = false

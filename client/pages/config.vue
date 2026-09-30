@@ -2,8 +2,8 @@
   <div id="page-wrapper" class="page p-2 md:p-6 overflow-y-auto relative" :class="streamLibraryItem ? 'streaming' : ''">
     <app-config-side-nav :is-open.sync="sideDrawerOpen" />
     <div class="configContent" :class="`page-${currentPage}`">
-      <div v-show="isMobilePortrait" class="w-full pb-4 px-2 flex border-b border-white border-opacity-10 mb-2 cursor-pointer" @click.stop.prevent="toggleShowMore">
-        <span class="material-icons text-2xl cursor-pointer">arrow_forward</span>
+      <div v-show="isMobilePortrait" class="w-full pb-4 px-2 flex border-b border-white/10 mb-2 cursor-pointer" @click.stop.prevent="toggleShowMore">
+        <span class="material-symbols text-2xl cursor-pointer">arrow_forward</span>
         <p class="pl-3 capitalize">{{ currentPage }}</p>
       </div>
       <nuxt-child />
@@ -52,8 +52,8 @@ export default {
         else if (pageName === 'notifications') return this.$strings.HeaderNotifications
         else if (pageName === 'sessions') return this.$strings.HeaderListeningSessions
         else if (pageName === 'stats') return this.$strings.HeaderYourStats
-        else if (pageName === 'library-stats') return this.$strings.HeaderLibraryStats
         else if (pageName === 'users') return this.$strings.HeaderUsers
+        else if (pageName === 'api-keys') return this.$strings.HeaderApiKeys
         else if (pageName === 'item-metadata-utils') return this.$strings.HeaderItemMetadataUtils
         else if (pageName === 'rss-feeds') return this.$strings.HeaderRSSFeeds
         else if (pageName === 'email') return this.$strings.HeaderEmail

@@ -21,6 +21,20 @@ describe('parseNfoMetadata', () => {
     expect(result.subtitle).to.equal('A Novel')
   })
 
+  it('does not split title on bare colon without space', () => {
+    const nfoText = 'Title: 10:04'
+    const result = parseNfoMetadata(nfoText)
+    expect(result.title).to.equal('10:04')
+    expect(result.subtitle).to.be.undefined
+  })
+
+  it('does not split title on colon between words without space', () => {
+    const nfoText = 'Title: Making the Mission:Impossible Movies'
+    const result = parseNfoMetadata(nfoText)
+    expect(result.title).to.equal('Making the Mission:Impossible Movies')
+    expect(result.subtitle).to.be.undefined
+  })
+
   it('parses authors', () => {
     const nfoText = 'Author: F. Scott Fitzgerald'
     const result = parseNfoMetadata(nfoText)
@@ -101,6 +115,16 @@ describe('parseNfoMetadata', () => {
     const nfoText = 'ASIN: B08X5JZJLH'
     const result = parseNfoMetadata(nfoText)
     expect(result.asin).to.equal('B08X5JZJLH')
+  })
+
+  it('parses language', () => {
+    const nfoText = 'Language: eng'
+    const result = parseNfoMetadata(nfoText)
+    expect(result.language).to.equal('eng')
+
+    const nfoText2 = 'lang: deu'
+    const result2 = parseNfoMetadata(nfoText2)
+    expect(result2.language).to.equal('deu')
   })
 
   it('parses description', () => {

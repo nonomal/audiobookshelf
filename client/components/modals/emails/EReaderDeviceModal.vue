@@ -26,8 +26,8 @@
           </div>
 
           <div class="flex items-center pt-4">
-            <div class="flex-grow" />
-            <ui-btn color="success" type="submit">{{ $strings.ButtonSubmit }}</ui-btn>
+            <div class="grow" />
+            <ui-btn color="bg-success" type="submit">{{ $strings.ButtonSubmit }}</ui-btn>
           </div>
         </div>
       </div>
@@ -46,7 +46,12 @@ export default {
     ereaderDevice: {
       type: Object,
       default: () => null
-    }
+    },
+    users: {
+      type: Array,
+      default: () => []
+    },
+    loadUsers: Function
   },
   data() {
     return {
@@ -56,8 +61,7 @@ export default {
         email: '',
         availabilityOption: 'adminAndUp',
         users: []
-      },
-      users: []
+      }
     }
   },
   watch: {
@@ -108,37 +112,25 @@ export default {
   methods: {
     availabilityOptionChanged(option) {
       if (option === 'specificUsers' && !this.users.length) {
-        this.loadUsers()
+        this.callLoadUsers()
       }
     },
-    async loadUsers() {
+    async callLoadUsers() {
       this.processing = true
-      this.users = await this.$axios
-        .$get('/api/users')
-        .then((res) => {
-          return res.users.sort((a, b) => {
-            return a.createdAt - b.createdAt
-          })
-        })
-        .catch((error) => {
-          console.error('Failed', error)
-          return []
-        })
-        .finally(() => {
-          this.processing = false
-        })
+      await this.loadUsers()
+      this.processing = false
     },
     submitForm() {
       this.$refs.ereaderNameInput.blur()
       this.$refs.ereaderEmailInput.blur()
 
       if (!this.newDevice.name?.trim() || !this.newDevice.email?.trim()) {
-        this.$toast.error('Name and email required')
+        this.$toast.error(this.$strings.ToastNameEmailRequired)
         return
       }
 
       if (this.newDevice.availabilityOption === 'specificUsers' && !this.newDevice.users.length) {
-        this.$toast.error('Must select at least one user')
+        this.$toast.error(this.$strings.ToastSelectAtLeastOneUser)
         return
       }
       if (this.newDevice.availabilityOption !== 'specificUsers') {
@@ -150,14 +142,14 @@ export default {
 
       if (!this.ereaderDevice) {
         if (this.existingDevices.some((d) => d.name === this.newDevice.name)) {
-          this.$toast.error('Ereader device with that name already exists')
+          this.$toast.error(this.$strings.ToastDeviceNameAlreadyExists)
           return
         }
 
         this.submitCreate()
       } else {
         if (this.ereaderDevice.name !== this.newDevice.name && this.existingDevices.some((d) => d.name === this.newDevice.name)) {
-          this.$toast.error('Ereader device with that name already exists')
+          this.$toast.error(this.$strings.ToastDeviceNameAlreadyExists)
           return
         }
 
@@ -182,12 +174,11 @@ export default {
         .$post(`/api/emails/ereader-devices`, payload)
         .then((data) => {
           this.$emit('update', data.ereaderDevices)
-          this.$toast.success('Device updated')
           this.show = false
         })
         .catch((error) => {
           console.error('Failed to update device', error)
-          this.$toast.error('Failed to update device')
+          this.$toast.error(this.$strings.ToastFailedToUpdate)
         })
         .finally(() => {
           this.processing = false
@@ -209,12 +200,11 @@ export default {
         .$post('/api/emails/ereader-devices', payload)
         .then((data) => {
           this.$emit('update', data.ereaderDevices || [])
-          this.$toast.success('Device added')
           this.show = false
         })
         .catch((error) => {
           console.error('Failed to add device', error)
-          this.$toast.error('Failed to add device')
+          this.$toast.error(this.$strings.ToastDeviceAddFailed)
         })
         .finally(() => {
           this.processing = false
@@ -226,10 +216,6 @@ export default {
         this.newDevice.email = this.ereaderDevice.email
         this.newDevice.availabilityOption = this.ereaderDevice.availabilityOption || 'adminOrUp'
         this.newDevice.users = this.ereaderDevice.users || []
-
-        if (this.newDevice.availabilityOption === 'specificUsers' && !this.users.length) {
-          this.loadUsers()
-        }
       } else {
         this.newDevice.name = ''
         this.newDevice.email = ''

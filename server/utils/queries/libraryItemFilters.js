@@ -6,7 +6,7 @@ const libraryItemsPodcastFilters = require('./libraryItemsPodcastFilters')
 module.exports = {
   /**
    * Get all library items that have tags
-   * @param {string[]} tags 
+   * @param {string[]} tags
    * @returns {Promise<import('../../models/LibraryItem')[]>}
    */
   async getAllLibraryItemsWithTags(tags) {
@@ -34,6 +34,10 @@ module.exports = {
             attributes: ['sequence']
           }
         }
+      ],
+      order: [
+        [Database.authorModel, Database.bookAuthorModel, 'createdAt', 'ASC'],
+        [Database.seriesModel, 'bookSeries', 'createdAt', 'ASC']
       ]
     })
     for (const book of booksWithTag) {
@@ -67,8 +71,8 @@ module.exports = {
 
   /**
    * Get all library items that have genres
-   * @param {string[]} genres 
-   * @returns {Promise<LibraryItem[]>}
+   * @param {string[]} genres
+   * @returns {Promise<import('../../models/LibraryItem')[]>}
    */
   async getAllLibraryItemsWithGenres(genres) {
     const libraryItems = []
@@ -127,11 +131,12 @@ module.exports = {
   },
 
   /**
- * Get all library items that have narrators
- * @param {string[]} narrators 
- * @returns {Promise<import('../../models/LibraryItem')[]>}
- */
-  async getAllLibraryItemsWithNarrators(narrators) {
+   * Get all library items that have narrators
+   * @param {string[]} narrators
+   * @param {string} libraryId
+   * @returns {Promise<import('../../models/LibraryItem')[]>}
+   */
+  async getAllLibraryItemsWithNarrators(narrators, libraryId) {
     const libraryItems = []
     const booksWithGenre = await Database.bookModel.findAll({
       where: Sequelize.where(Sequelize.literal(`(SELECT count(*) FROM json_each(narrators) WHERE json_valid(narrators) AND json_each.value IN (:narrators))`), {
@@ -142,7 +147,8 @@ module.exports = {
       },
       include: [
         {
-          model: Database.libraryItemModel
+          model: Database.libraryItemModel,
+          where: { libraryId }
         },
         {
           model: Database.authorModel,
@@ -168,24 +174,24 @@ module.exports = {
 
   /**
    * Search library items
-   * @param {import('../../objects/user/User')} oldUser 
-   * @param {import('../../objects/Library')} oldLibrary 
+   * @param {import('../../models/User')} user
+   * @param {import('../../models/Library')} library
    * @param {string} query
-   * @param {number} limit 
+   * @param {number} limit
    * @returns {{book:object[], narrators:object[], authors:object[], tags:object[], series:object[], podcast:object[]}}
    */
-  search(oldUser, oldLibrary, query, limit) {
-    if (oldLibrary.isBook) {
-      return libraryItemsBookFilters.search(oldUser, oldLibrary, query, limit, 0)
+  search(user, library, query, limit) {
+    if (library.isBook) {
+      return libraryItemsBookFilters.search(user, library, query, limit, 0)
     } else {
-      return libraryItemsPodcastFilters.search(oldUser, oldLibrary, query, limit, 0)
+      return libraryItemsPodcastFilters.search(user, library, query, limit, 0)
     }
   },
 
   /**
    * Get largest items in library
-   * @param {string} libraryId 
-   * @param {number} limit 
+   * @param {string} libraryId
+   * @param {number} limit
    * @returns {Promise<{ id:string, title:string, size:number }[]>}
    */
   async getLargestItems(libraryId, limit) {
@@ -204,12 +210,10 @@ module.exports = {
           attributes: ['id', 'title']
         }
       ],
-      order: [
-        ['size', 'DESC']
-      ],
+      order: [['size', 'DESC']],
       limit
     })
-    return libraryItems.map(libraryItem => {
+    return libraryItems.map((libraryItem) => {
       return {
         id: libraryItem.id,
         title: libraryItem.media.title,

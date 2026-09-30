@@ -9,16 +9,16 @@
       <div class="flex">
         <div class="w-40 p-2">
           <div class="w-full h-45 relative">
-            <covers-author-image :author="author" />
+            <covers-author-image :author="authorCopy" />
             <div v-if="userCanDelete && !processing && author.imagePath" class="absolute top-0 left-0 w-full h-full opacity-0 hover:opacity-100">
-              <span class="absolute top-2 right-2 material-icons text-error transform hover:scale-125 transition-transform cursor-pointer text-lg" @click="removeCover">delete</span>
+              <span class="absolute top-2 right-2 material-symbols text-error transform hover:scale-125 transition-transform cursor-pointer text-lg" @click="removeCover">delete</span>
             </div>
           </div>
         </div>
-        <div class="flex-grow">
-          <form @submit.prevent="submitUploadCover" class="flex flex-grow mb-2 p-2">
+        <div class="grow">
+          <form @submit.prevent="submitUploadCover" class="flex grow mb-2 p-2">
             <ui-text-input v-model="imageUrl" :placeholder="$strings.LabelImageURLFromTheWeb" class="h-9 w-full" />
-            <ui-btn color="success" type="submit" :padding-x="4" :disabled="!imageUrl" class="ml-2 sm:ml-3 w-24 h-9">{{ $strings.ButtonSubmit }}</ui-btn>
+            <ui-btn color="bg-success" type="submit" :padding-x="4" :disabled="!imageUrl" class="ml-2 sm:ml-3 w-24 h-9">{{ $strings.ButtonSubmit }}</ui-btn>
           </form>
 
           <form v-if="author" @submit.prevent="submitForm">
@@ -26,20 +26,17 @@
               <div class="w-3/4 p-2">
                 <ui-text-input-with-label v-model="authorCopy.name" :disabled="processing" :label="$strings.LabelName" />
               </div>
-              <div class="flex-grow p-2">
+              <div class="grow p-2">
                 <ui-text-input-with-label v-model="authorCopy.asin" :disabled="processing" label="ASIN" />
               </div>
             </div>
-            <!-- <div class="p-2">
-              <ui-text-input-with-label v-model="authorCopy.imagePath" :disabled="processing" :label="$strings.LabelPhotoPathURL" />
-            </div> -->
             <div class="p-2">
               <ui-textarea-with-label v-model="authorCopy.description" :disabled="processing" :label="$strings.LabelDescription" :rows="8" />
             </div>
 
             <div class="flex pt-2 px-2">
-              <ui-btn v-if="userCanDelete" small color="error" type="button" @click.stop="removeClick">{{ $strings.ButtonRemove }}</ui-btn>
-              <div class="flex-grow" />
+              <ui-btn v-if="userCanDelete" small color="bg-error" type="button" @click.stop="removeClick">{{ $strings.ButtonRemove }}</ui-btn>
+              <div class="grow" />
               <ui-btn type="button" class="mx-2" @click="searchAuthor">{{ $strings.ButtonQuickMatch }}</ui-btn>
 
               <ui-btn type="submit">{{ $strings.ButtonSave }}</ui-btn>
@@ -106,9 +103,9 @@ export default {
   methods: {
     init() {
       this.imageUrl = ''
-      this.authorCopy.name = this.author.name
-      this.authorCopy.asin = this.author.asin
-      this.authorCopy.description = this.author.description
+      this.authorCopy = {
+        ...this.author
+      }
     },
     removeClick() {
       const payload = {
@@ -119,12 +116,12 @@ export default {
             this.$axios
               .$delete(`/api/authors/${this.authorId}`)
               .then(() => {
-                this.$toast.success('Author removed')
+                this.$toast.success(this.$strings.ToastAuthorRemoveSuccess)
                 this.show = false
               })
               .catch((error) => {
                 console.error('Failed to remove author', error)
-                this.$toast.error('Failed to remove author')
+                this.$toast.error(this.$strings.ToastRemoveFailed)
               })
               .finally(() => {
                 this.processing = false
@@ -144,14 +141,14 @@ export default {
         }
       })
       if (!Object.keys(updatePayload).length) {
-        this.$toast.info(this.$strings.MessageNoUpdateNecessary)
+        this.$toast.info(this.$strings.ToastNoUpdatesNecessary)
         return
       }
       this.processing = true
       var result = await this.$axios.$patch(`/api/authors/${this.authorId}`, updatePayload).catch((error) => {
         console.error('Failed', error)
         const errorMsg = error.response ? error.response.data : null
-        this.$toast.error(errorMsg || this.$strings.ToastAuthorUpdateFailed)
+        this.$toast.error(errorMsg || this.$strings.ToastFailedToUpdate)
         return null
       })
       if (result) {
@@ -161,7 +158,7 @@ export default {
         } else if (result.merged) {
           this.$toast.success(this.$strings.ToastAuthorUpdateMerged)
           this.show = false
-        } else this.$toast.info(this.$strings.MessageNoUpdatesWereNecessary)
+        } else this.$toast.info(this.$strings.ToastNoUpdatesNecessary)
       }
       this.processing = false
     },
@@ -171,11 +168,13 @@ export default {
         .$delete(`/api/authors/${this.authorId}/image`)
         .then((data) => {
           this.$toast.success(this.$strings.ToastAuthorImageRemoveSuccess)
-          this.$store.commit('globals/showEditAuthorModal', data.author)
+
+          this.authorCopy.updatedAt = data.author.updatedAt
+          this.authorCopy.imagePath = data.author.imagePath
         })
         .catch((error) => {
           console.error('Failed', error)
-          this.$toast.error(this.$strings.ToastAuthorImageRemoveFailed)
+          this.$toast.error(this.$strings.ToastRemoveFailed)
         })
         .finally(() => {
           this.processing = false
@@ -183,7 +182,7 @@ export default {
     },
     submitUploadCover() {
       if (!this.imageUrl?.startsWith('http:') && !this.imageUrl?.startsWith('https:')) {
-        this.$toast.error('Invalid image url')
+        this.$toast.error(this.$strings.ToastInvalidImageUrl)
         return
       }
 
@@ -195,12 +194,14 @@ export default {
         .$post(`/api/authors/${this.authorId}/image`, updatePayload)
         .then((data) => {
           this.imageUrl = ''
-          this.$toast.success('Author image updated')
-          this.$store.commit('globals/showEditAuthorModal', data.author)
+          this.$toast.success(this.$strings.ToastAuthorUpdateSuccess)
+
+          this.authorCopy.updatedAt = data.author.updatedAt
+          this.authorCopy.imagePath = data.author.imagePath
         })
         .catch((error) => {
           console.error('Failed', error)
-          this.$toast.error(error.response.data || 'Failed to remove author image')
+          this.$toast.error(error.response.data || this.$strings.ToastRemoveFailed)
         })
         .finally(() => {
           this.processing = false
@@ -208,7 +209,7 @@ export default {
     },
     async searchAuthor() {
       if (!this.authorCopy.name && !this.authorCopy.asin) {
-        this.$toast.error('Must enter an author name')
+        this.$toast.error(this.$strings.ToastNameRequired)
         return
       }
       this.processing = true
@@ -227,14 +228,19 @@ export default {
         return null
       })
       if (!response) {
-        this.$toast.error('Author not found')
+        this.$toast.error(this.$strings.ToastAuthorSearchNotFound)
       } else if (response.updated) {
         if (response.author.imagePath) {
           this.$toast.success(this.$strings.ToastAuthorUpdateSuccess)
-          this.$store.commit('globals/showEditAuthorModal', response.author)
-        } else this.$toast.success(this.$strings.ToastAuthorUpdateSuccessNoImageFound)
+        } else {
+          this.$toast.success(this.$strings.ToastAuthorUpdateSuccessNoImageFound)
+        }
+
+        this.authorCopy = {
+          ...response.author
+        }
       } else {
-        this.$toast.info('No updates were made for Author')
+        this.$toast.info(this.$strings.ToastNoUpdatesNecessary)
       }
       this.processing = false
     }

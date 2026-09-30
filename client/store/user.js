@@ -1,19 +1,24 @@
 export const state = () => ({
   user: null,
+  accessToken: null,
   settings: {
     orderBy: 'media.metadata.title',
     orderDesc: false,
     filterBy: 'all',
     playbackRate: 1,
+    playbackRateIncrementDecrement: 0.1,
     bookshelfCoverSize: 120,
     collapseSeries: false,
     collapseBookSeries: false,
+    showSubtitles: false,
     useChapterTrack: false,
     seriesSortBy: 'name',
     seriesSortDesc: false,
     seriesFilterBy: 'all',
     authorSortBy: 'name',
-    authorSortDesc: false
+    authorSortDesc: false,
+    jumpForwardAmount: 10,
+    jumpBackwardAmount: 10
   }
 })
 
@@ -21,18 +26,20 @@ export const getters = {
   getIsRoot: (state) => state.user && state.user.type === 'root',
   getIsAdminOrUp: (state) => state.user && (state.user.type === 'admin' || state.user.type === 'root'),
   getToken: (state) => {
-    return state.user?.token || null
+    return state.accessToken || null
   },
-  getUserMediaProgress: (state) => (libraryItemId, episodeId = null) => {
-    if (!state.user.mediaProgress) return null
-    return state.user.mediaProgress.find(li => {
-      if (episodeId && li.episodeId !== episodeId) return false
-      return li.libraryItemId == libraryItemId
-    })
-  },
+  getUserMediaProgress:
+    (state) =>
+    (libraryItemId, episodeId = null) => {
+      if (!state.user?.mediaProgress) return null
+      return state.user.mediaProgress.find((li) => {
+        if (episodeId && li.episodeId !== episodeId) return false
+        return li.libraryItemId == libraryItemId
+      })
+    },
   getUserBookmarksForItem: (state) => (libraryItemId) => {
-    if (!state.user.bookmarks) return []
-    return state.user.bookmarks.filter(bm => bm.libraryItemId === libraryItemId)
+    if (!state.user?.bookmarks) return []
+    return state.user.bookmarks.filter((bm) => bm.libraryItemId === libraryItemId)
   },
   getUserSetting: (state) => (key) => {
     return state.settings?.[key] || null
@@ -52,6 +59,9 @@ export const getters = {
   getUserCanAccessAllLibraries: (state) => {
     return !!state.user?.permissions?.accessAllLibraries
   },
+  getUserCanAccessExplicitContent: (state) => {
+    return !!state.user?.permissions?.accessExplicitContent
+  },
   getLibrariesAccessible: (state, getters) => {
     if (!state.user) return []
     if (getters.getUserCanAccessAllLibraries) return []
@@ -65,6 +75,9 @@ export const getters = {
   getIsSeriesRemovedFromContinueListening: (state) => (seriesId) => {
     if (!state.user || !state.user.seriesHideFromContinueListening || !state.user.seriesHideFromContinueListening.length) return false
     return state.user.seriesHideFromContinueListening.includes(seriesId)
+  },
+  getSizeMultiplier: (state) => {
+    return state.settings.bookshelfCoverSize / 120
   }
 }
 
@@ -79,10 +92,10 @@ export const actions = {
       if (state.settings.orderBy == 'media.duration') {
         settingsUpdate.orderBy = 'media.numTracks'
       }
-      if (state.settings.orderBy == 'media.metadata.publishedYear') {
+      if (state.settings.orderBy == 'media.metadata.publishedYear' || state.settings.orderBy == 'progress') {
         settingsUpdate.orderBy = 'media.metadata.title'
       }
-      const invalidFilters = ['series', 'authors', 'narrators', 'publishers', 'languages', 'progress', 'issues', 'ebooks', 'abridged']
+      const invalidFilters = ['series', 'authors', 'narrators', 'publishers', 'publishedDecades', 'languages', 'progress', 'issues', 'ebooks', 'abridged']
       const filterByFirstPart = (state.settings.filterBy || '').split('.').shift()
       if (invalidFilters.includes(filterByFirstPart)) {
         settingsUpdate.filterBy = 'all'
@@ -133,28 +146,48 @@ export const actions = {
     } catch (error) {
       console.error('Failed to load userSettings from local storage', error)
     }
+  },
+  refreshToken({ state, commit }) {
+    return this.$axios
+      .$post('/auth/refresh')
+      .then(async (response) => {
+        const newAccessToken = response.user.accessToken
+        commit('setAccessToken', newAccessToken)
+        // Emit event used to re-authenticate socket in default.vue since $root is not available here
+        if (this.$eventBus) {
+          this.$eventBus.$emit('token_refreshed', newAccessToken)
+        }
+        return newAccessToken
+      })
+      .catch((error) => {
+        console.error('Failed to refresh token', error)
+        commit('setUser', null)
+        commit('setAccessToken', null)
+        // Calling function handles redirect to login
+        throw error
+      })
   }
 }
 
 export const mutations = {
   setUser(state, user) {
     state.user = user
-    if (user) {
-      if (user.token) localStorage.setItem('token', user.token)
-    } else {
-      localStorage.removeItem('token')
-    }
   },
-  setUserToken(state, token) {
-    state.user.token = token
-    localStorage.setItem('token', user.token)
+  setAccessToken(state, token) {
+    if (!token) {
+      localStorage.removeItem('token')
+      state.accessToken = null
+    } else {
+      state.accessToken = token
+      localStorage.setItem('token', token)
+    }
   },
   updateMediaProgress(state, { id, data }) {
     if (!state.user) return
     if (!data) {
-      state.user.mediaProgress = state.user.mediaProgress.filter(lip => lip.id != id)
+      state.user.mediaProgress = state.user.mediaProgress.filter((lip) => lip.id != id)
     } else {
-      var indexOf = state.user.mediaProgress.findIndex(lip => lip.id == id)
+      var indexOf = state.user.mediaProgress.findIndex((lip) => lip.id == id)
       if (indexOf >= 0) {
         state.user.mediaProgress.splice(indexOf, 1, data)
       } else {

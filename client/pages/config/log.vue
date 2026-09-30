@@ -1,18 +1,26 @@
 <template>
   <div>
-    <app-settings-content :header-text="$strings.HeaderLogs">
-      <div class="flex justify-between mb-2 place-items-end">
-        <ui-text-input ref="input" v-model="search" placeholder="Search filter.." @input="inputUpdate" clearable class="w-full sm:w-40 h-8 text-sm sm:mb-0" />
+    <app-settings-content :header-text="$strings.HeaderLogs" :description="$strings.MessageLogsDescription">
+      <template #header-items>
+        <ui-tooltip :text="$strings.LabelClickForMoreInfo" class="inline-flex ml-2">
+          <a href="https://audiobookshelf.org/docs/documentation/server-management/server-logs" target="_blank" class="inline-flex">
+            <span class="material-symbols text-xl w-5 text-gray-200">help_outline</span>
+          </a>
+        </ui-tooltip>
+      </template>
 
-        <ui-dropdown v-model="newServerSettings.logLevel" label="Server Log Level" :items="logLevelItems" @input="logLevelUpdated" class="w-full sm:w-44" />
+      <div class="flex justify-between mb-2 place-items-end">
+        <ui-text-input ref="input" v-model="search" :placeholder="$strings.PlaceholderSearch" @input="inputUpdate" clearable class="w-full sm:w-40 h-8 text-sm sm:mb-0" />
+
+        <ui-dropdown v-model="newServerSettings.logLevel" :label="$strings.LabelServerLogLevel" :items="logLevelItems" @input="logLevelUpdated" class="w-full sm:w-44" />
       </div>
 
       <div class="relative">
         <div ref="container" id="log-container" class="relative w-full h-full bg-primary border-bg overflow-x-hidden overflow-y-auto text-red shadow-inner rounded-md" style="min-height: 550px">
           <template v-for="(log, index) in logs">
-            <div :key="index" class="flex flex-nowrap px-2 py-1 items-start text-sm bg-opacity-10" :class="`bg-${logColors[log.level]}`">
+            <div :key="index" class="flex flex-nowrap px-2 py-1 items-start text-sm" :class="`${bgColors[log.level]}`">
               <p class="text-gray-400 w-36 font-mono text-xs">{{ log.timestamp }}</p>
-              <p class="font-semibold w-12 text-right text-sm" :class="`text-${logColors[log.level]}`">{{ log.levelName }}</p>
+              <p class="font-semibold w-12 text-right text-sm" :class="`${textColors[log.level]}`">{{ log.levelName }}</p>
               <p class="px-4 logmessage">{{ log.message }}</p>
             </div>
           </template>
@@ -39,7 +47,8 @@ export default {
       searchTimeout: null,
       searchText: null,
       newServerSettings: {},
-      logColors: ['yellow-200', 'gray-400', 'info', 'warning', 'error', 'red-800', 'blue-400'],
+      textColors: ['text-yellow-200', 'text-gray-400', 'text-info', 'text-warning', 'text-error', 'text-red-800', 'text-blue-400'],
+      bgColors: ['bg-yellow-200/10', 'bg-gray-400/10', 'bg-info/10', 'bg-warning/10', 'bg-error/10', 'bg-red-800/10', 'bg-blue-400/10'],
       loadedLogs: []
     }
   },
@@ -139,7 +148,7 @@ export default {
     async loadLoggerData() {
       const loggerData = await this.$axios.$get('/api/logger-data').catch((error) => {
         console.error('Failed to load logger data', error)
-        this.$toast.error('Failed to load logger data')
+        this.$toast.error(this.$strings.ToastFailedToLoadData)
       })
 
       this.loadedLogs = loggerData?.currentDailyLogs || []

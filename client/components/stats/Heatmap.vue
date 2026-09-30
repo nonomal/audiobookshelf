@@ -1,19 +1,19 @@
 <template>
   <div id="heatmap" class="w-full">
     <div class="mx-auto" :style="{ height: innerHeight + 160 + 'px', width: innerWidth + 52 + 'px' }" style="background-color: rgba(13, 17, 23, 0)">
-      <p class="mb-2 px-1 text-sm text-gray-200">{{ $getString('MessageListeningSessionsInTheLastYear', [Object.values(daysListening).length]) }}</p>
-      <div class="border border-white border-opacity-25 rounded py-2 w-full" style="background-color: #232323" :style="{ height: innerHeight + 80 + 'px' }">
+      <p class="mb-2 px-1 text-sm text-gray-200">{{ $getString('MessageDaysListenedInTheLastYear', [daysListenedInTheLastYear]) }}</p>
+      <div class="border border-white/25 rounded-sm py-2 w-full" style="background-color: #232323" :style="{ height: innerHeight + 80 + 'px' }">
         <div :style="{ width: innerWidth + 'px', height: innerHeight + 'px' }" class="ml-10 mt-5 absolute" @mouseover="mouseover" @mouseout="mouseout">
           <div v-for="dayLabel in dayLabels" :key="dayLabel.label" :style="dayLabel.style" class="absolute top-0 left-0 text-gray-300">{{ dayLabel.label }}</div>
 
           <div v-for="monthLabel in monthLabels" :key="monthLabel.id" :style="monthLabel.style" class="absolute top-0 left-0 text-gray-300">{{ monthLabel.label }}</div>
 
-          <div v-for="(block, index) in data" :key="block.dateString" :style="block.style" :data-index="index" class="absolute top-0 left-0 h-2.5 w-2.5 rounded-sm" />
+          <div v-for="(block, index) in data" :key="block.dateString" :style="block.style" :data-index="index" class="absolute top-0 left-0 h-2.5 w-2.5 rounded-xs" />
 
           <div class="flex py-2 px-4" :style="{ marginTop: innerHeight + 'px' }">
-            <div class="flex-grow" />
+            <div class="grow" />
             <p style="font-size: 10px; line-height: 10px" class="text-gray-400 px-1">{{ $strings.LabelLess }}</p>
-            <div v-for="block in legendBlocks" :key="block.id" :style="block.style" class="h-2.5 w-2.5 rounded-sm" style="margin-left: 1.5px; margin-right: 1.5px" />
+            <div v-for="block in legendBlocks" :key="block.id" :style="block.style" class="h-2.5 w-2.5 rounded-xs" style="margin-left: 1.5px; margin-right: 1.5px" />
             <p style="font-size: 10px; line-height: 10px" class="text-gray-400 px-1">{{ $strings.LabelMore }}</p>
           </div>
         </div>
@@ -37,6 +37,7 @@ export default {
       innerHeight: 13 * 7,
       blockWidth: 13,
       data: [],
+      daysListenedInTheLastYear: 0,
       monthLabels: [],
       tooltipEl: null,
       tooltipTextEl: null,
@@ -61,9 +62,6 @@ export default {
     },
     dayOfWeekToday() {
       return new Date().getDay()
-    },
-    firstWeekStart() {
-      return this.$addDaysToToday(-this.daysToShow)
     },
     dayLabels() {
       return [
@@ -126,7 +124,7 @@ export default {
     },
     createTooltip() {
       const tooltip = document.createElement('div')
-      tooltip.className = 'absolute top-0 left-0 rounded bg-gray-500 text-white p-2 text-white max-w-xs pointer-events-none'
+      tooltip.className = 'absolute top-0 left-0 rounded-sm bg-gray-500 text-white p-2 text-white max-w-xs pointer-events-none'
       tooltip.style.display = 'none'
       tooltip.id = 'heatmap-tooltip'
 
@@ -154,7 +152,7 @@ export default {
 
       this.showingTooltipIndex = index
       this.tooltipEl.style.display = 'block'
-      this.tooltipTextEl.innerHTML = block.value ? `<strong>${this.$elapsedPretty(block.value, true)} listening</strong> on ${block.datePretty}` : `No listening sessions on ${block.datePretty}`
+      this.tooltipTextEl.innerHTML = block.value ? this.$getString('MessageHeatmapListeningTimeTooltip', [this.$elapsedPrettyLocalized(block.value, true), block.datePretty]) : this.$getString('MessageHeatmapNoListeningSessions', [block.datePretty])
 
       const calculateRect = this.tooltipEl.getBoundingClientRect()
 
@@ -193,46 +191,59 @@ export default {
     buildData() {
       this.data = []
 
-      var maxValue = 0
-      var minValue = 0
-      Object.values(this.daysListening).forEach((val) => {
-        if (val > maxValue) maxValue = val
-        if (!minValue || val < minValue) minValue = val
-      })
+      let maxValue = 0
+      let minValue = 0
+
+      const dates = []
+
+      const numDaysInTheLastYear = 52 * 7 + this.dayOfWeekToday
+      const firstDay = this.$addDaysToToday(-numDaysInTheLastYear)
+      for (let i = 0; i < numDaysInTheLastYear + 1; i++) {
+        const date = i === 0 ? firstDay : this.$addDaysToDate(firstDay, i)
+        const dateString = this.$formatJsDate(date, 'yyyy-MM-dd')
+
+        if (this.daysListening[dateString] > 0) {
+          this.daysListenedInTheLastYear++
+        }
+
+        const visibleDayIndex = i - (numDaysInTheLastYear - this.daysToShow)
+        if (visibleDayIndex < 0) {
+          continue
+        }
+
+        const dateObj = {
+          col: Math.floor(visibleDayIndex / 7),
+          row: visibleDayIndex % 7,
+          date,
+          dateString,
+          datePretty: this.$formatJsDate(date, 'MMM d, yyyy'),
+          monthString: this.$formatJsDate(date, 'MMM'),
+          dayOfMonth: Number(dateString.split('-').pop()),
+          yearString: dateString.split('-').shift(),
+          value: this.daysListening[dateString] || 0
+        }
+        dates.push(dateObj)
+
+        if (dateObj.value > 0) {
+          if (dateObj.value > maxValue) maxValue = dateObj.value
+          if (!minValue || dateObj.value < minValue) minValue = dateObj.value
+        }
+      }
       const range = maxValue - minValue + 0.01
 
-      for (let i = 0; i < this.daysToShow + 1; i++) {
-        const col = Math.floor(i / 7)
-        const row = i % 7
-
-        const date = i === 0 ? this.firstWeekStart : this.$addDaysToDate(this.firstWeekStart, i)
-        const dateString = this.$formatJsDate(date, 'yyyy-MM-dd')
-        const datePretty = this.$formatJsDate(date, 'MMM d, yyyy')
-        const monthString = this.$formatJsDate(date, 'MMM')
-        const value = this.daysListening[dateString] || 0
-        const x = col * 13
-        const y = row * 13
-
-        var bgColor = this.bgColors[0]
-        var outlineColor = this.outlineColors[0]
-        if (value) {
+      for (const dateObj of dates) {
+        let bgColor = this.bgColors[0]
+        let outlineColor = this.outlineColors[0]
+        if (dateObj.value) {
           outlineColor = this.outlineColors[1]
-          var percentOfAvg = (value - minValue) / range
-          var bgIndex = Math.floor(percentOfAvg * 4) + 1
+          const percentOfAvg = (dateObj.value - minValue) / range
+          const bgIndex = Math.floor(percentOfAvg * 4) + 1
           bgColor = this.bgColors[bgIndex] || 'red'
         }
 
         this.data.push({
-          date,
-          dateString,
-          datePretty,
-          monthString,
-          dayOfMonth: Number(dateString.split('-').pop()),
-          yearString: dateString.split('-').shift(),
-          value,
-          col,
-          row,
-          style: `transform:translate(${x}px,${y}px);background-color:${bgColor};outline:1px solid ${outlineColor};outline-offset:-1px;`
+          ...dateObj,
+          style: `transform:translate(${dateObj.col * 13}px,${dateObj.row * 13}px);background-color:${bgColor};outline:1px solid ${outlineColor};outline-offset:-1px;`
         })
       }
 
@@ -260,6 +271,7 @@ export default {
       const heatmapEl = document.getElementById('heatmap')
       this.contentWidth = heatmapEl.clientWidth
       this.maxInnerWidth = this.contentWidth - 52
+      this.daysListenedInTheLastYear = 0
       this.buildData()
     }
   },

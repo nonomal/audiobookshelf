@@ -1,17 +1,18 @@
 <template>
-  <div ref="wrapper" class="modal modal-bg w-full h-full fixed top-0 left-0 bg-primary bg-opacity-75 flex items-center justify-center z-60 opacity-0">
-    <div class="absolute top-0 left-0 right-0 w-full h-36 bg-gradient-to-t from-transparent via-black-500 to-black-700 opacity-90 pointer-events-none" />
+  <div ref="wrapper" class="modal modal-bg w-full h-full fixed top-0 left-0 bg-primary/75 flex items-center justify-center z-60 opacity-0">
+    <div class="absolute top-0 left-0 right-0 w-full h-36 bg-linear-to-t from-transparent via-black-500 to-black-700 opacity-90 pointer-events-none" />
     <div ref="content" class="relative text-white" :style="{ height: modalHeight, width: modalWidth }" v-click-outside="clickedOutside">
       <div class="px-4 w-full text-sm py-6 rounded-lg bg-bg shadow-lg border border-black-300">
-        <p class="text-lg mb-6 mt-2 px-1" v-html="message" />
+        <p v-if="allowHtmlMessage" id="confirm-prompt-message" class="text-lg mb-6 mt-2 px-1" v-html="sanitizedMessage" />
+        <p v-else id="confirm-prompt-message" class="text-lg mb-6 mt-2 px-1">{{ message }}</p>
 
         <ui-checkbox v-if="checkboxLabel" v-model="checkboxValue" checkbox-bg="bg" :label="checkboxLabel" label-class="pl-2 text-base" class="mb-6 px-1" />
 
         <div class="flex px-1 items-center">
-          <ui-btn v-if="isYesNo" color="primary" @click="nevermind">{{ $strings.ButtonCancel }}</ui-btn>
-          <div class="flex-grow" />
-          <ui-btn v-if="isYesNo" :color="yesButtonColor" @click="confirm">{{ yesButtonText }}</ui-btn>
-          <ui-btn v-else color="primary" @click="confirm">{{ $strings.ButtonOk }}</ui-btn>
+          <ui-btn v-if="isYesNo" color="bg-primary" @click="nevermind">{{ $strings.ButtonCancel }}</ui-btn>
+          <div class="grow" />
+          <ui-btn v-if="isYesNo" :color="`bg-${yesButtonColor}`" @click="confirm">{{ yesButtonText }}</ui-btn>
+          <ui-btn v-else color="bg-primary" @click="confirm">{{ $strings.ButtonOk }}</ui-btn>
         </div>
       </div>
     </div>
@@ -51,6 +52,17 @@ export default {
     },
     message() {
       return this.confirmPromptOptions.message || ''
+    },
+    allowHtmlMessage() {
+      return !!this.confirmPromptOptions.allowHtml
+    },
+    sanitizedMessage() {
+      if (!this.allowHtmlMessage) return this.message
+
+      return this.escapeHtml(this.message)
+        .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+        .replace(/&lt;code&gt;/gi, '<code>')
+        .replace(/&lt;\/code&gt;/gi, '</code>')
     },
     callback() {
       return this.confirmPromptOptions.callback
@@ -103,6 +115,14 @@ export default {
       if (this.callback) this.callback(true, this.checkboxValue)
       this.show = false
     },
+    escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    },
     setShow() {
       this.checkboxValue = this.checkboxDefaultValue
       this.$eventBus.$emit('showing-prompt', true)
@@ -132,3 +152,13 @@ export default {
   }
 }
 </script>
+
+<style>
+#confirm-prompt-message code {
+  font-size: 1rem;
+  border-radius: 6px;
+  background-color: rgb(82, 82, 82);
+  color: white;
+  padding: 2px 4px;
+}
+</style>
